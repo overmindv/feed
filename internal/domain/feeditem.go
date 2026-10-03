@@ -6,8 +6,10 @@ import (
 )
 
 // FeedItem — одна запись ленты активностей, отрендеренная в заголовок/ссылку.
-// Source/EventKey образуют идемпотентный ключ (source='catalog'|'task',
-// event_key=aggregate_id|task_id).
+// (Source, EventKey, Kind) образуют идемпотентный ключ: redelivery того же события
+// дедуплицируется, а разные события одного агрегата (created/activated) сохраняются
+// (source='catalog'|'task', event_key=aggregate_id|task_id).
+// ActorUserID может быть пустым — у событий задач нет доверенного actor.
 type FeedItem struct {
 	ID            string
 	Source        string
