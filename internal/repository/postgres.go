@@ -25,8 +25,8 @@ func (r *Postgres) Ping(ctx context.Context) error {
 	return r.pool.Ping(ctx)
 }
 
-// InsertItem вставляет запись ленты; false если такая (source, event_key) уже
-// существует — на конфликте ничего не делаем и не считаем это ошибкой.
+// InsertItem вставляет запись ленты; false если такой (source, event_key, kind)
+// уже существует — на конфликте ничего не делаем и не считаем это ошибкой.
 func (r *Postgres) InsertItem(ctx context.Context, item domain.FeedItem) (bool, error) {
 	payload, err := json.Marshal(item.RawPayload)
 	if err != nil {
@@ -37,8 +37,8 @@ func (r *Postgres) InsertItem(ctx context.Context, item domain.FeedItem) (bool, 
 			(source, event_key, kind, actor_user_id, aggregate_type, aggregate_id,
 			 occurred_at, title, text, href, raw_payload)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		ON CONFLICT (source, event_key) DO NOTHING`,
-		item.Source, item.EventKey, item.Kind, item.ActorUserID,
+		ON CONFLICT (source, event_key, kind) DO NOTHING`,
+		item.Source, item.EventKey, item.Kind, nullableUUID(item.ActorUserID),
 		item.AggregateType, item.AggregateID, item.OccurredAt,
 		item.Title, item.Text, item.Href, payload)
 	if err != nil {
@@ -46,6 +46,15 @@ func (r *Postgres) InsertItem(ctx context.Context, item domain.FeedItem) (bool, 
 	}
 
 	return tag.RowsAffected() == 1, nil
+}
+
+// nullableUUID преобразует пустой actor в SQL NULL (события задач не имеют actor).
+func nullableUUID(value string) any {
+	if value == "" {
+		return nil
+	}
+
+	return value
 }
 
 // ListItems возвращает записи ленты по убыванию времени события.
@@ -58,7 +67,7 @@ func (r *Postgres) ListItems(ctx context.Context, limit, offset int) ([]domain.F
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text, source, event_key, kind, actor_user_id::text,
+		SELECT id::text, source, event_key, kind, COALESCE(actor_user_id::text, ''),
 		       aggregate_type, aggregate_id, occurred_at, title, text, href, raw_payload
 		FROM feed_items
 		ORDER BY occurred_at DESC, id DESC
