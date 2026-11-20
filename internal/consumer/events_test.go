@@ -124,17 +124,57 @@ func TestCatalogDoesNotRenderPrerequisite(t *testing.T) {
 func TestTaskPublishedRemainsVisible(t *testing.T) {
 	id := "77777777-7777-7777-7777-777777777777"
 	message, err := decodeEvent(id, mustJSON(t, map[string]any{
-		"event_type": "task.published",
-		"task_id":    id,
-		"title":      "Двоичный поиск",
+		"event_type":  "task.published",
+		"task_id":     id,
+		"occurred_at": time.Now().UTC(),
+		"title":       "Двоичный поиск",
 	}))
 	if err != nil || message.task == nil {
 		t.Fatal("task publication was not rendered", err)
 	}
-	item := message.task
+	item := message.task.Item
 	if item.Title != "Новая задача: Двоичный поиск" || item.Source != "task" ||
-		item.EventKey != id || item.Href != "/tasks/"+id {
+		item.EventKey != id || item.Href != "/tasks/"+id || message.task.EventID != "" {
 		t.Error("unexpected task card", item)
+	}
+}
+
+func TestEventIdentityFromBothSources(t *testing.T) {
+	const id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	catalog := catalogFixture()
+	catalog["event_id"] = id
+	message, err := decodeEvent(courseID, mustJSON(t, catalog))
+	if err != nil || message.catalog == nil || message.catalog.EventID != id {
+		t.Fatal("catalog event lost its identity", err)
+	}
+
+	task := map[string]any{
+		"event_type":  "task.published",
+		"event_id":    id,
+		"task_id":     courseID,
+		"occurred_at": time.Now().UTC(),
+		"title":       "Задача",
+	}
+	message, err = decodeEvent(courseID, mustJSON(t, task))
+	if err != nil || message.task == nil || message.task.EventID != id {
+		t.Fatal("task event lost its identity", err)
+	}
+	if _, err := decodeEvent(id, mustJSON(t, task)); err == nil {
+		t.Error("event ID was accepted as the Kafka key instead of task ID")
+	}
+	for _, bad := range []string{"", "invalid", "00000000-0000-0000-0000-000000000000"} {
+		task["event_id"] = bad
+		catalog["event_id"] = bad
+		for _, fixture := range []map[string]any{task, catalog} {
+			if _, err := decodeEvent(courseID, mustJSON(t, fixture)); err == nil {
+				t.Error("invalid event identity accepted", bad)
+			}
+		}
+	}
+	task["event_id"] = id
+	task["event_type"] = "task.unpublished"
+	if message, err := decodeEvent(courseID, mustJSON(t, task)); err != nil || message.task != nil {
+		t.Error("unpublished event was rendered", err)
 	}
 }
 

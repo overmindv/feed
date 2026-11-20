@@ -2,7 +2,6 @@ package consumer
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/overmindv/feed/internal/repository"
@@ -20,9 +19,7 @@ func NewHandler(store repository.Repository, log *slog.Logger) parker.Handler {
 			return store.ApplyCatalogChange(ctx, *message.catalog)
 		}
 		if message.task != nil {
-			if _, err := store.InsertItem(ctx, *message.task); err != nil {
-				return fmt.Errorf("feed: insert item: %w", err)
-			}
+			return store.ApplyTaskPublication(ctx, *message.task)
 		}
 
 		return nil

@@ -24,10 +24,16 @@ func (r *Postgres) ApplyCatalogChange(ctx context.Context, change domain.Catalog
 
 	// Старая блокировка не меняет текущий статус, но скрывает карточки, выпущенные до нее.
 	_, err := r.pool.Exec(ctx, `
-		WITH accepted AS (
+		WITH received AS (
+			INSERT INTO feed_event_inbox (source,event_id)
+			SELECT 'catalog', $15::uuid WHERE $15::uuid IS NOT NULL
+			ON CONFLICT DO NOTHING
+			RETURNING 1
+		), accepted AS (
 			INSERT INTO feed_catalog_visibility AS current
 				(resource_key, catalog_revision, aggregate_version, visible, fence_revision)
-			VALUES ($1, $2, $3, $4, $5)
+			SELECT $1, $2, $3, $4, $5
+			WHERE $15::uuid IS NULL OR EXISTS (SELECT 1 FROM received)
 			ON CONFLICT (resource_key) DO UPDATE SET
 				catalog_revision = GREATEST(current.catalog_revision, EXCLUDED.catalog_revision),
 				aggregate_version = GREATEST(current.aggregate_version, EXCLUDED.aggregate_version),
@@ -51,7 +57,7 @@ func (r *Postgres) ApplyCatalogChange(ctx context.Context, change domain.Catalog
 			raw_payload=EXCLUDED.raw_payload, catalog_revision=EXCLUDED.catalog_revision,
 			visibility_keys=EXCLUDED.visibility_keys`, change.ResourceKey, change.CatalogRevision,
 		change.AggregateVersion, visible, fence, item.Kind, nullableUUID(item.ActorUserID),
-		item.AggregateType, item.AggregateID, item.OccurredAt, item.Title, item.Text, item.Href, keys)
+		item.AggregateType, item.AggregateID, item.OccurredAt, item.Title, item.Text, item.Href, keys, nullableUUID(change.EventID))
 	if err != nil {
 		return fmt.Errorf("apply catalog visibility: %w", err)
 	}

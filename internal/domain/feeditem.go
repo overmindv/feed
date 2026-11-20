@@ -6,9 +6,7 @@ import (
 )
 
 // FeedItem — одна запись ленты активностей, отрендеренная в заголовок/ссылку.
-// (Source, EventKey, Kind) образуют идемпотентный ключ: redelivery того же события
-// дедуплицируется, а разные события одного агрегата (created/activated) сохраняются
-// (source='catalog'|'task', event_key=aggregate_id|task_id).
+// EventKey определяет группу карточки, а не идентификатор Kafka-события.
 // ActorUserID может быть пустым — у событий задач нет доверенного actor.
 type FeedItem struct {
 	ID            string
@@ -26,10 +24,16 @@ type FeedItem struct {
 }
 
 type CatalogChange struct {
+	EventID          string
 	ResourceKey      string
 	CatalogRevision  int64
 	AggregateVersion int64
 	ScopeReset       bool
 	Ancestors        []string
 	Item             *FeedItem
+}
+
+type TaskPublication struct {
+	EventID string
+	Item    FeedItem
 }

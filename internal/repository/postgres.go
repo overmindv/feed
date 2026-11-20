@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -25,33 +24,35 @@ func (r *Postgres) Ping(ctx context.Context) error {
 	return r.pool.Ping(ctx)
 }
 
-// InsertItem вставляет запись ленты; false если такой (source, event_key, kind)
-// уже существует — на конфликте ничего не делаем и не считаем это ошибкой.
-func (r *Postgres) InsertItem(ctx context.Context, item domain.FeedItem) (bool, error) {
-	if item.Source == "catalog" {
-		return false, errors.New("catalog item requires a visibility update")
+func (r *Postgres) ApplyTaskPublication(ctx context.Context, publication domain.TaskPublication) error {
+	item := publication.Item
+	eventKey := item.AggregateID
+	if publication.EventID != "" {
+		eventKey = "event:" + publication.EventID
 	}
-	payload, err := json.Marshal(item.RawPayload)
-	if err != nil {
-		return false, fmt.Errorf("сериализовать raw payload: %w", err)
-	}
-	tag, err := r.pool.Exec(ctx, `
+	_, err := r.pool.Exec(ctx, `
+		WITH received AS (
+			INSERT INTO feed_event_inbox (source,event_id)
+			SELECT 'task', $1::uuid WHERE $1::uuid IS NOT NULL
+			ON CONFLICT DO NOTHING
+			RETURNING 1
+		)
 		INSERT INTO feed_items
 			(source, event_key, kind, actor_user_id, aggregate_type, aggregate_id,
 			 occurred_at, title, text, href, raw_payload)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		SELECT 'task', $2, 'task.published', NULL, 'task', $3, $4, $5, '', $6, $7::jsonb
+		WHERE $1::uuid IS NULL OR EXISTS (SELECT 1 FROM received)
 		ON CONFLICT (source, event_key, kind) DO NOTHING`,
-		item.Source, item.EventKey, item.Kind, nullableUUID(item.ActorUserID),
-		item.AggregateType, item.AggregateID, item.OccurredAt,
-		item.Title, item.Text, item.Href, payload)
+		nullableUUID(publication.EventID), eventKey, item.AggregateID, item.OccurredAt,
+		item.Title, item.Href, item.RawPayload)
 	if err != nil {
-		return false, fmt.Errorf("insert feed item: %w", err)
+		return fmt.Errorf("apply task publication: %w", err)
 	}
 
-	return tag.RowsAffected() == 1, nil
+	return nil
 }
 
-// nullableUUID преобразует пустой actor в SQL NULL (события задач не имеют actor).
+// nullableUUID сохраняет отсутствие необязательного UUID.
 func nullableUUID(value string) any {
 	if value == "" {
 		return nil

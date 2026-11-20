@@ -1,24 +1,38 @@
 package repository_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/overmindv/feed/internal/consumer"
 	"github.com/overmindv/feed/internal/httpapi"
 	"github.com/overmindv/feed/internal/repository"
 	"github.com/overmindv/feed/internal/service"
+	"github.com/overmindv/parker"
 )
 
 func feedTestPool(t testing.TB) *pgxpool.Pool {
+	t.Helper()
+	pool, migrate := feedTestSchema(t)
+	migrate("../../migrations")
+
+	return pool
+}
+
+func feedTestSchema(t testing.TB) (*pgxpool.Pool, func(string)) {
 	t.Helper()
 	dsn := os.Getenv("FEED_TEST_DSN")
 	if dsn == "" {
@@ -28,13 +42,58 @@ func feedTestPool(t testing.TB) *pgxpool.Pool {
 	if err != nil || !strings.HasSuffix(cfg.ConnConfig.Database, "_test") {
 		t.Fatal("FEED_TEST_DSN must point to a dedicated database ending in _test")
 	}
+	admin, err := pgxpool.New(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	var schema string
+	if err := admin.QueryRow(t.Context(), "SELECT 'feed_test_' || replace(gen_random_uuid()::text, '-', '')").Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(t.Context(), "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+	})
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	migrationConn := stdlib.RegisterConnConfig(cfg.ConnConfig)
+	t.Cleanup(func() { stdlib.UnregisterConnConfig(migrationConn) })
 	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
 
-	return pool
+	return pool, func(dir string) {
+		t.Helper()
+		if err := parker.RunMigrate(dir, migrationConn, "up"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func feedMigrationsBeforeInbox(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"000001_feed_items.sql", "000002_feed_items_actor_and_idempotency.sql",
+		"000003_catalog_visibility.sql", "000004_feed_public_window.sql"} {
+		source, err := os.ReadFile(filepath.Join("../../migrations", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), source, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return dir
 }
 
 func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
@@ -61,15 +120,18 @@ func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	deliver("task-fixture", map[string]any{
+	const task = "aaaa1111-1111-1111-1111-111111111111"
+	deliver(task, map[string]any{
 		"event_type":  "task.published",
-		"task_id":     "task-fixture",
+		"task_id":     task,
 		"occurred_at": time.Now().UTC(),
 		"title":       "test task",
 	})
 	const course = "11111111-1111-1111-1111-111111111111"
 	const topic = "22222222-2222-2222-2222-222222222222"
 	const child = "33333333-3333-3333-3333-333333333333"
+	coursePath, topicPath, childPath := "/courses/"+course, "/topics/"+topic, "/topics/"+child
+	taskPath := "/tasks/" + task
 	change := func(kind, id, action string, rev, version int, public, reset bool, ancestors ...string) map[string]any {
 		if ancestors == nil {
 			ancestors = []string{}
@@ -77,6 +139,7 @@ func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 
 		return map[string]any{
 			"event_type":        "catalog." + kind + "." + action,
+			"event_id":          fmt.Sprintf("53333333-3333-3333-3333-%012x", 1000-rev),
 			"occurred_at":       time.Now().UTC(),
 			"aggregate_type":    kind,
 			"aggregate_id":      id,
@@ -119,20 +182,24 @@ func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 		if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
-		if len(result.Items) != len(want)+1 {
-			t.Error("unexpected card count", len(result.Items), "want", len(want)+1, res.Body.String())
-		}
 		seen := make(map[string]bool)
+		count := 0
 		for _, row := range result.Items {
-			seen[row.Href] = true
+			switch row.Href {
+			case taskPath, coursePath, topicPath, childPath, "/courses/old":
+				seen[row.Href] = true
+				count++
+			}
 		}
-		for _, href := range append(want, "/tasks/task-fixture") {
+		if count != len(want)+1 {
+			t.Error("unexpected fixture card count", count, "want", len(want)+1, seen)
+		}
+		for _, href := range append(want, taskPath) {
 			if !seen[href] {
 				t.Error("missing card", href)
 			}
 		}
 	}
-	coursePath, topicPath, childPath := "/courses/"+course, "/topics/"+topic, "/topics/"+child
 	originalCourse := change("course", course, "created", 1, 1, true, false)
 	originalTopic := change("topic", topic, "created", 2, 1, true, false, "course:"+course)
 	deliver(course, originalCourse)

@@ -11,6 +11,7 @@ import (
 
 // catalogEnvelope — конверт события каталога от entities (topic catalog.activity.v1).
 type catalogEnvelope struct {
+	EventID          *string         `json:"event_id"`
 	EventType        string          `json:"event_type"`
 	OccurredAt       time.Time       `json:"occurred_at"`
 	ActorUserID      string          `json:"actor_user_id"`
@@ -38,6 +39,7 @@ type catalogPayload struct {
 
 // taskEnvelope — конверт события публикации задачи от tasks (topic task.activity.v1).
 type taskEnvelope struct {
+	EventID    *string   `json:"event_id,omitempty"`
 	EventType  string    `json:"event_type"`
 	OccurredAt time.Time `json:"occurred_at"`
 	TaskID     string    `json:"task_id"`
@@ -73,7 +75,7 @@ type envelopeMeta struct {
 }
 
 type event struct {
-	task    *domain.FeedItem
+	task    *domain.TaskPublication
 	catalog *domain.CatalogChange
 }
 
@@ -91,12 +93,9 @@ func decodeEvent(key string, value []byte) (event, error) {
 
 		return event{catalog: change}, err
 	case strings.HasPrefix(meta.EventType, "task."):
-		item, ok, err := renderTask(value)
-		if err != nil || !ok {
-			return event{}, err
-		}
+		publication, err := decodeTaskPublication(key, value)
 
-		return event{task: &item}, nil
+		return event{task: publication}, err
 	default:
 		return event{}, fmt.Errorf("unknown feed event type")
 	}
@@ -107,7 +106,7 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	if err := json.Unmarshal(value, &e); err != nil {
 		return nil, fmt.Errorf("parse catalog envelope: %w", err)
 	}
-	if !catalogKind(e.AggregateType) || !validCatalogID(e.AggregateID) || (key != "" && key != e.AggregateID) {
+	if !catalogKind(e.AggregateType) || !validUUID(e.AggregateID) || (key != "" && key != e.AggregateID) {
 		return nil, fmt.Errorf("invalid catalog aggregate key")
 	}
 	prefix := "catalog." + e.AggregateType + "."
@@ -126,7 +125,12 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	if e.CatalogRevision < 1 || e.AggregateVersion < 1 {
 		return nil, fmt.Errorf("invalid catalog event version")
 	}
+	eventID, err := parseEventID(e.EventID)
+	if err != nil {
+		return nil, err
+	}
 	change := &domain.CatalogChange{
+		EventID:          eventID,
 		ResourceKey:      e.AggregateType + ":" + e.AggregateID,
 		CatalogRevision:  e.CatalogRevision,
 		AggregateVersion: e.AggregateVersion,
@@ -138,7 +142,7 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	if e.Visibility.Ancestors == nil || !validAncestorKeys(change.ResourceKey, e.Visibility.Ancestors) {
 		return nil, fmt.Errorf("invalid catalog ancestors")
 	}
-	if e.OccurredAt.IsZero() || (e.ActorUserID != "" && !validCatalogID(e.ActorUserID)) {
+	if e.OccurredAt.IsZero() || (e.ActorUserID != "" && !validUUID(e.ActorUserID)) {
 		return nil, fmt.Errorf("invalid catalog activity metadata")
 	}
 	name := strings.TrimSpace(e.Payload.Name)
@@ -184,19 +188,20 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	return change, nil
 }
 
-// renderTask рендерит публикацию задачи. Событий сразу «published»-типа нет —
-// принимаем любой task-конверт как факт публикации.
-func renderTask(value []byte) (domain.FeedItem, bool, error) {
+func decodeTaskPublication(key string, value []byte) (*domain.TaskPublication, error) {
 	var e taskEnvelope
 	if err := json.Unmarshal(value, &e); err != nil {
-		return domain.FeedItem{}, false, fmt.Errorf("parse task envelope: %w", err)
+		return nil, fmt.Errorf("parse task envelope: %w", err)
 	}
-	if e.TaskID == "" {
-		return domain.FeedItem{}, false, fmt.Errorf("task event без task_id")
+	if e.EventType != "task.published" {
+		return nil, nil
 	}
-	if e.EventType != "" && !strings.HasSuffix(e.EventType, "published") {
-		// На будущее: если появятся другие task-события, их можно фильтровать здесь.
-		return domain.FeedItem{}, false, nil
+	if !validUUID(e.TaskID) || (key != "" && key != e.TaskID) || e.OccurredAt.IsZero() {
+		return nil, fmt.Errorf("invalid task activity metadata")
+	}
+	eventID, err := parseEventID(e.EventID)
+	if err != nil {
+		return nil, err
 	}
 
 	title := strings.TrimSpace(e.Title)
@@ -205,22 +210,34 @@ func renderTask(value []byte) (domain.FeedItem, bool, error) {
 	}
 	raw, err := json.Marshal(e)
 	if err != nil {
-		return domain.FeedItem{}, false, fmt.Errorf("marshal task envelope: %w", err)
+		return nil, fmt.Errorf("marshal task envelope: %w", err)
 	}
 
-	return domain.FeedItem{
-		Source:        "task",
-		EventKey:      e.TaskID,
-		Kind:          "task.published",
-		ActorUserID:   "",
-		AggregateType: "task",
-		AggregateID:   e.TaskID,
-		OccurredAt:    e.OccurredAt,
-		Title:         "Новая задача: " + title,
-		Text:          "",
-		Href:          "/tasks/" + e.TaskID,
-		RawPayload:    raw,
-	}, true, nil
+	return &domain.TaskPublication{
+		EventID: eventID,
+		Item: domain.FeedItem{
+			Source:        "task",
+			EventKey:      e.TaskID,
+			Kind:          "task.published",
+			AggregateType: "task",
+			AggregateID:   e.TaskID,
+			OccurredAt:    e.OccurredAt,
+			Title:         "Новая задача: " + title,
+			Href:          "/tasks/" + e.TaskID,
+			RawPayload:    raw,
+		},
+	}, nil
+}
+
+func parseEventID(value *string) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	if !validUUID(*value) {
+		return "", fmt.Errorf("invalid event_id")
+	}
+
+	return *value, nil
 }
 
 func catalogKind(kind string) bool {
@@ -232,7 +249,7 @@ func catalogKind(kind string) bool {
 	}
 }
 
-func validCatalogID(id string) bool {
+func validUUID(id string) bool {
 	if len(id) != 36 || id == "00000000-0000-0000-0000-000000000000" {
 		return false
 	}
@@ -260,7 +277,7 @@ func validAncestorKeys(self string, keys []string) bool {
 	seen := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		kind, id, ok := strings.Cut(key, ":")
-		if !ok || key == self || !catalogKind(kind) || !validCatalogID(id) {
+		if !ok || key == self || !catalogKind(kind) || !validUUID(id) {
 			return false
 		}
 		if _, duplicate := seen[key]; duplicate {
