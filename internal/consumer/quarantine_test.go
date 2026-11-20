@@ -21,20 +21,25 @@ type activityFixture struct {
 
 func (f *activityFixture) ApplyCatalogChange(context.Context, domain.CatalogChange) error {
 	f.applied++
+
 	return f.applyErr
 }
 
 func (f *activityFixture) ApplyTaskPublication(context.Context, domain.TaskPublication) error {
 	f.applied++
+
 	return f.applyErr
 }
 
 func (f *activityFixture) SaveRejection(_ context.Context, rejected domain.EventRejection) (bool, error) {
 	f.rejections = append(f.rejections, rejected)
+
 	return f.saveErr == nil, f.saveErr
 }
 
 func TestQuarantineLogsOnlyMetadata(t *testing.T) {
+	t.Parallel()
+
 	store := &activityFixture{}
 	var logs bytes.Buffer
 	handle := NewHandler(store, slog.New(slog.NewJSONHandler(&logs, nil)), "catalog", "tasks")
@@ -53,6 +58,7 @@ func TestQuarantineLogsOnlyMetadata(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // subtests intentionally share one in-memory rejection fixture
 func TestClassifyActivityRefusals(t *testing.T) {
 	store := &activityFixture{}
 	handle := NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), "catalog", "tasks")
@@ -88,6 +94,8 @@ func TestClassifyActivityRefusals(t *testing.T) {
 }
 
 func TestActivityStorageErrorsPropagate(t *testing.T) {
+	t.Parallel()
+
 	databaseErr := errors.New("database offline")
 	store := &activityFixture{saveErr: databaseErr, applyErr: databaseErr}
 	handle := NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), "catalog", "tasks")

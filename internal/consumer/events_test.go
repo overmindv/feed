@@ -37,6 +37,8 @@ func catalogFixture() map[string]any {
 }
 
 func TestCatalogShowsOnlyConfirmedPublicEvents(t *testing.T) {
+	t.Parallel()
+
 	for _, action := range []string{"created", "updated"} {
 		fixture := catalogFixture()
 		fixture["event_type"] = "catalog.course." + action
@@ -61,6 +63,8 @@ func TestCatalogShowsOnlyConfirmedPublicEvents(t *testing.T) {
 }
 
 func TestCatalogHidesDraftArchiveDeleteAndInheritedVisibility(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		action string
 		status string
@@ -85,6 +89,8 @@ func TestCatalogHidesDraftArchiveDeleteAndInheritedVisibility(t *testing.T) {
 }
 
 func TestCatalogIgnoresLegacyPublicationAndChecksResourceIdentity(t *testing.T) {
+	t.Parallel()
+
 	fixture := catalogFixture()
 	delete(fixture, "feed_visibility")
 	message, err := decodeEvent(courseID, mustJSON(t, fixture))
@@ -112,6 +118,8 @@ func TestCatalogIgnoresLegacyPublicationAndChecksResourceIdentity(t *testing.T) 
 }
 
 func TestCatalogDoesNotRenderPrerequisite(t *testing.T) {
+	t.Parallel()
+
 	fixture := catalogFixture()
 	fixture["aggregate_type"] = "topic"
 	fixture["event_type"] = "catalog.topic.prerequisite.added"
@@ -122,6 +130,8 @@ func TestCatalogDoesNotRenderPrerequisite(t *testing.T) {
 }
 
 func TestTaskPublishedRemainsVisible(t *testing.T) {
+	t.Parallel()
+
 	id := "77777777-7777-7777-7777-777777777777"
 	message, err := decodeEvent(id, mustJSON(t, map[string]any{
 		"event_type":  "task.published",
@@ -140,6 +150,8 @@ func TestTaskPublishedRemainsVisible(t *testing.T) {
 }
 
 func TestEventIdentityFromBothSources(t *testing.T) {
+	t.Parallel()
+
 	const id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 	catalog := catalogFixture()
 	catalog["event_id"] = id
@@ -179,6 +191,8 @@ func TestEventIdentityFromBothSources(t *testing.T) {
 }
 
 func TestUnknownAndOversizedEvents(t *testing.T) {
+	t.Parallel()
+
 	for _, value := range [][]byte{[]byte("{\"event_type\":\"other.thing\"}"), []byte(strings.Repeat(" ", (1<<20)+1))} {
 		if _, err := decodeEvent("", value); err == nil {
 			t.Error("invalid event was accepted")

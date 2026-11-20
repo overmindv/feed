@@ -49,18 +49,31 @@ type taskEnvelope struct {
 	Difficulty string    `json:"difficulty"`
 }
 
+const (
+	sourceCatalog       = "catalog"
+	sourceTask          = "task"
+	aggregateUniversity = "university"
+	aggregateProgram    = "program"
+	aggregateCourse     = "course"
+	aggregateTopic      = "topic"
+	actionDeleted       = "deleted"
+	actionUnpublished   = "unpublished"
+	actionUpdated       = "updated"
+	taskUnpublished     = "task.unpublished"
+)
+
 // aggregatorName — человекочитаемое имя aggregate для заголовков.
 func aggregatorName(aggregateType string) string {
 	switch aggregateType {
-	case "university":
+	case aggregateUniversity:
 		return "университет"
-	case "program":
+	case aggregateProgram:
 		return "программа"
-	case "course":
+	case aggregateCourse:
 		return "курс"
-	case "topic":
+	case aggregateTopic:
 		return "тема"
-	case "task":
+	case sourceTask:
 		return "задача"
 	default:
 		return aggregateType
@@ -96,13 +109,15 @@ func decodeEvent(key string, value []byte) (event, error) {
 		if err != nil && err != domain.RejectUnknownType {
 			err = domain.RejectInvalidCatalog
 		}
-		return event{source: "catalog", catalog: change}, err
+
+		return event{source: sourceCatalog, catalog: change}, err
 	case strings.HasPrefix(meta.EventType, "task."):
 		publication, err := decodeTaskPublication(key, value)
 		if err != nil && err != domain.RejectUnknownType {
 			err = domain.RejectInvalidTask
 		}
-		return event{source: "task", task: publication}, err
+
+		return event{source: sourceTask, task: publication}, err
 	default:
 		return event{}, domain.RejectUnknownType
 	}
@@ -122,11 +137,12 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 		return nil, fmt.Errorf("catalog aggregate type does not match the event")
 	}
 	switch action {
-	case "created", "updated", "unpublished", "deleted":
+	case "created", actionUpdated, actionUnpublished, actionDeleted:
 	case "prerequisite.added", "prerequisite.removed":
-		if e.AggregateType == "topic" {
+		if e.AggregateType == aggregateTopic {
 			return nil, nil
 		}
+
 		fallthrough
 	default:
 		return nil, domain.RejectUnknownType
@@ -147,7 +163,7 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 		CatalogRevision:  e.CatalogRevision,
 		AggregateVersion: e.AggregateVersion,
 	}
-	if action == "deleted" || action == "unpublished" || e.Payload.Status != "active" ||
+	if action == actionDeleted || action == actionUnpublished || e.Payload.Status != "active" ||
 		e.Visibility == nil || !e.Visibility.Visible {
 		return change, nil
 	}
@@ -169,6 +185,7 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	for offset := range name {
 		if runes == maxTitleRunes {
 			name = name[:offset]
+
 			break
 		}
 		runes++
@@ -177,7 +194,7 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	aggregate := e.AggregateType
 	kind := aggregate + ".created"
 	mask := "Новый %s: %s"
-	if action == "updated" {
+	if action == actionUpdated {
 		kind = aggregate + ".activated"
 		mask = "Активирован %s: %s"
 	}
@@ -185,7 +202,7 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	change.ScopeReset = e.Visibility.ScopeReset
 	change.Ancestors = e.Visibility.Ancestors
 	change.Item = &domain.FeedItem{
-		Source:        "catalog",
+		Source:        sourceCatalog,
 		EventKey:      change.ResourceKey,
 		Kind:          kind,
 		ActorUserID:   e.ActorUserID,
@@ -207,7 +224,7 @@ func decodeTaskPublication(key string, value []byte) (*domain.TaskPublication, e
 	}
 	switch e.EventType {
 	case "task.published":
-	case "task.unpublished":
+	case taskUnpublished:
 		return nil, nil
 	default:
 		return nil, domain.RejectUnknownType
@@ -236,10 +253,10 @@ func decodeTaskPublication(key string, value []byte) (*domain.TaskPublication, e
 	return &domain.TaskPublication{
 		EventID: eventID,
 		Item: domain.FeedItem{
-			Source:        "task",
+			Source:        sourceTask,
 			EventKey:      e.TaskID,
 			Kind:          "task.published",
-			AggregateType: "task",
+			AggregateType: sourceTask,
 			AggregateID:   e.TaskID,
 			OccurredAt:    e.OccurredAt,
 			Title:         "Новая задача: " + title,
@@ -262,7 +279,7 @@ func parseEventID(value *string) (string, error) {
 
 func catalogKind(kind string) bool {
 	switch kind {
-	case "university", "program", "course", "topic":
+	case aggregateUniversity, aggregateProgram, aggregateCourse, aggregateTopic:
 		return true
 	default:
 		return false

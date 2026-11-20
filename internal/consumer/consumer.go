@@ -23,7 +23,7 @@ func NewHandler(store activityStore, log *slog.Logger, catalogTopic, taskTopic s
 		case catalogTopic:
 			source = "catalog"
 		case taskTopic:
-			source = "task"
+			source = sourceTask
 		default:
 			return errors.New("unexpected kafka topic")
 		}
@@ -55,6 +55,7 @@ func handleActivity(
 		log.Warn("feed event quarantined", "topic", position.Topic, "partition", position.Partition,
 			"offset", position.Offset, "reason", reason, "payload_size", len(value))
 	}
+
 	return nil
 }
 
@@ -63,6 +64,7 @@ func decodeForSource(source, key string, value []byte) (event, error) {
 	if message.source != "" && message.source != source {
 		return event{}, domain.RejectWrongSource
 	}
+
 	return message, err
 }
 
@@ -73,5 +75,6 @@ func (e event) apply(ctx context.Context, writer repository.ActivityWriter) erro
 	if e.task != nil {
 		return writer.ApplyTaskPublication(ctx, *e.task)
 	}
+
 	return nil
 }

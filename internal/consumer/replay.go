@@ -27,6 +27,7 @@ func ReadReplayPayload(input io.Reader) ([]byte, error) {
 	if len(payload) > maxEventSize {
 		return nil, domain.RejectTooLarge
 	}
+
 	return payload, nil
 }
 
@@ -45,6 +46,7 @@ func Replay(ctx context.Context, store replayStore, p domain.EventPosition, payl
 		case identity.Kind == "" && !allowUnverified:
 			return ErrIdentityUnverified
 		}
+
 		return message.apply(ctx, writer)
 	})
 }
