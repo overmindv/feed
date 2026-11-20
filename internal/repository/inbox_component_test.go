@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/overmindv/feed/internal/consumer"
+	"github.com/overmindv/feed/internal/domain"
 	"github.com/overmindv/feed/internal/repository"
 )
 
@@ -15,7 +16,8 @@ func TestInboxSeparatesPublicationFromDelivery(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
 	store := repository.New(pool)
-	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), catalogTopic, taskTopic)
+	taskPosition := domain.EventPosition{Topic: taskTopic}
 	const taskID = "ded10000-0000-0000-0000-000000000001"
 	const firstID = "ded10000-0000-0000-0000-000000000002"
 	const secondID = "ded10000-0000-0000-0000-000000000003"
@@ -47,27 +49,27 @@ func TestInboxSeparatesPublicationFromDelivery(t *testing.T) {
 
 		return wire(values)
 	}
-	deliver := func(key string, data []byte) {
+	deliver := func(topic, key string, data []byte) {
 		t.Helper()
-		if err := handle(ctx, key, data); err != nil {
+		if err := handle(ctx, domain.EventPosition{Topic: topic}, key, data); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	legacy := published(taskID, "", "legacy")
-	deliver(taskID, legacy)
-	deliver(taskID, legacy)
+	deliver(taskTopic, taskID, legacy)
+	deliver(taskTopic, taskID, legacy)
 	first := published(taskID, firstID, "first publication")
 	results := make(chan error, 8)
 	for range cap(results) {
-		go func() { results <- handle(ctx, taskID, first) }()
+		go func() { results <- handle(ctx, taskPosition, taskID, first) }()
 	}
 	for range cap(results) {
 		if err := <-results; err != nil {
 			t.Fatal(err)
 		}
 	}
-	deliver(taskID, published(taskID, secondID, "second publication"))
+	deliver(taskTopic, taskID, published(taskID, secondID, "second publication"))
 
 	// UUID совпадает между источниками, но повтор каталога не меняет состояние.
 	catalog := map[string]any{
@@ -81,17 +83,17 @@ func TestInboxSeparatesPublicationFromDelivery(t *testing.T) {
 		"payload":           map[string]any{"status": "active", "name": "Public course"},
 		"feed_visibility":   map[string]any{"visible": true, "ancestors": []string{}},
 	}
-	deliver(courseID, wire(catalog))
+	deliver(catalogTopic, courseID, wire(catalog))
 	catalog["event_type"] = "catalog.course.unpublished"
 	catalog["aggregate_version"], catalog["catalog_revision"] = 2, 1002
-	deliver(courseID, wire(catalog))
+	deliver(catalogTopic, courseID, wire(catalog))
 
 	retry := published(retryTask, retryID, "retry publication")
 	if _, err := pool.Exec(ctx, `ALTER TABLE feed_items ADD CONSTRAINT fixture_reject_publication
 		CHECK (aggregate_id <> 'ded10000-0000-0000-0000-000000000005') NOT VALID`); err != nil {
 		t.Fatal(err)
 	}
-	if err := handle(ctx, retryTask, retry); err == nil {
+	if err := handle(ctx, taskPosition, retryTask, retry); err == nil {
 		t.Fatal("expected fixture to reject the card write")
 	}
 	var recorded bool
@@ -104,8 +106,8 @@ func TestInboxSeparatesPublicationFromDelivery(t *testing.T) {
 	if _, err := pool.Exec(ctx, "ALTER TABLE feed_items DROP CONSTRAINT fixture_reject_publication"); err != nil {
 		t.Fatal(err)
 	}
-	deliver(retryTask, retry)
-	deliver(retryTask, retry)
+	deliver(taskTopic, retryTask, retry)
+	deliver(taskTopic, retryTask, retry)
 
 	rows, err := store.ListItems(ctx, 100, 0)
 	if err != nil {
@@ -157,7 +159,7 @@ func TestInboxMigrationKeepsOldPublicationIdentity(t *testing.T) {
 	migrate("../../migrations")
 
 	store := repository.New(pool)
-	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), catalogTopic, taskTopic)
 	value, err := json.Marshal(map[string]any{
 		"event_type":  "task.published",
 		"task_id":     taskID,
@@ -167,7 +169,7 @@ func TestInboxMigrationKeepsOldPublicationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := handle(ctx, taskID, value); err != nil {
+	if err := handle(ctx, domain.EventPosition{Topic: taskTopic}, taskID, value); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := store.ListItems(ctx, 50, 0)

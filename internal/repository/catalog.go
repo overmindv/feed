@@ -7,7 +7,7 @@ import (
 	"github.com/overmindv/feed/internal/domain"
 )
 
-func (r *Postgres) ApplyCatalogChange(ctx context.Context, change domain.CatalogChange) error {
+func (r activityWriter) ApplyCatalogChange(ctx context.Context, change domain.CatalogChange) error {
 	visible := change.Item != nil
 	var fence int64
 	if !visible || change.ScopeReset {
@@ -23,7 +23,7 @@ func (r *Postgres) ApplyCatalogChange(ctx context.Context, change domain.Catalog
 	}
 
 	// Старая блокировка не меняет текущий статус, но скрывает карточки, выпущенные до нее.
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.Exec(ctx, `
 		WITH received AS (
 			INSERT INTO feed_event_inbox (source,event_id)
 			SELECT 'catalog', $15::uuid WHERE $15::uuid IS NOT NULL

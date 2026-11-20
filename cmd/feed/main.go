@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	appfeed "github.com/overmindv/feed/internal/app/feed"
@@ -11,6 +12,13 @@ import (
 // миграции, логирование, метрики, graceful shutdown) — внутри parker, здесь
 // только бизнес-логика (см. run).
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "replay" {
+		if err := runReplay(os.Args[2:], os.Stdin); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	os.Exit(parker.Main(run, parker.WithAppName("feed")))
 }
 

@@ -1,0 +1,18 @@
+groups:
+  - name: feed-quarantine
+    rules:
+      - alert: FeedEventQuarantinePending
+        expr: max without (instance, pod) (feed_quarantine_oldest_pending_seconds) > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feed has an activity event awaiting replay"
+          description: "The oldest open rejection is over five minutes old. Check the Feed quarantine journal."
+      - alert: FeedEventQuarantineMetricFailed
+        expr: feed_quarantine_oldest_pending_seconds != feed_quarantine_oldest_pending_seconds
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feed cannot read the quarantine journal"
+          description: "Check database connectivity and migration 000006."

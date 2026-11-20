@@ -1,8 +1,12 @@
 package feed
 
 import (
+	"context"
+	"errors"
+
 	"github.com/overmindv/feed/internal/config"
 	"github.com/overmindv/feed/internal/consumer"
+	"github.com/overmindv/feed/internal/domain"
 	"github.com/overmindv/feed/internal/httpapi"
 	"github.com/overmindv/feed/internal/repository"
 	"github.com/overmindv/feed/internal/service"
@@ -25,12 +29,22 @@ func Build(app *parker.App) error {
 
 	store := repository.New(pool)
 	feedService := service.New(store)
+	if metrics := app.Metrics(); metrics != nil {
+		if err := metrics.Register(oldestRejectionAge(store)); err != nil {
+			return err
+		}
+	}
 
-	// Consumer-group активити: читает оба топика одним подписчиком; источник
-	// события определяется по event_type внутри конверта.
+	handle := consumer.NewHandler(store, app.Logger(), cfg.CatalogActivityTopic, cfg.TaskActivityTopic)
 	subscriber, err := app.NewSubscriber(cfg.ConsumerGroup,
 		[]string{cfg.CatalogActivityTopic, cfg.TaskActivityTopic},
-		consumer.NewHandler(store, app.Logger()))
+		func(ctx context.Context, key string, value []byte) error {
+			position, ok := parker.PositionFromContext(ctx)
+			if !ok {
+				return errors.New("missing kafka position")
+			}
+			return handle(ctx, domain.EventPosition(position), key, value)
+		})
 	if err != nil {
 		return err
 	}

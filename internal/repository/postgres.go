@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/overmindv/feed/internal/domain"
 )
@@ -12,11 +13,18 @@ import (
 // Postgres — потоковая реализация Repository на pgx/v5.
 type Postgres struct {
 	pool *pgxpool.Pool
+	activityWriter
 }
+
+type sqlExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type activityWriter struct{ db sqlExecutor }
 
 // New создаёт Postgres-хранилище ленты на переданном пуле соединений.
 func New(pool *pgxpool.Pool) *Postgres {
-	return &Postgres{pool: pool}
+	return &Postgres{pool: pool, activityWriter: activityWriter{db: pool}}
 }
 
 // Ping проверяет доступность хранилища.
@@ -24,13 +32,13 @@ func (r *Postgres) Ping(ctx context.Context) error {
 	return r.pool.Ping(ctx)
 }
 
-func (r *Postgres) ApplyTaskPublication(ctx context.Context, publication domain.TaskPublication) error {
+func (r activityWriter) ApplyTaskPublication(ctx context.Context, publication domain.TaskPublication) error {
 	item := publication.Item
 	eventKey := item.AggregateID
 	if publication.EventID != "" {
 		eventKey = "event:" + publication.EventID
 	}
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.Exec(ctx, `
 		WITH received AS (
 			INSERT INTO feed_event_inbox (source,event_id)
 			SELECT 'task', $1::uuid WHERE $1::uuid IS NOT NULL

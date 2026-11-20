@@ -18,10 +18,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/overmindv/feed/internal/consumer"
+	"github.com/overmindv/feed/internal/domain"
 	"github.com/overmindv/feed/internal/httpapi"
 	"github.com/overmindv/feed/internal/repository"
 	"github.com/overmindv/feed/internal/service"
 	"github.com/overmindv/parker"
+)
+
+const (
+	catalogTopic = "catalog.activity.v1"
+	taskTopic    = "task.activity.v1"
 )
 
 func feedTestPool(t testing.TB) *pgxpool.Pool {
@@ -106,7 +112,7 @@ func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	handle := consumer.NewHandler(store, log)
+	handle := consumer.NewHandler(store, log, catalogTopic, taskTopic)
 	token := strings.Repeat("t", 32)
 	api := http.NewServeMux()
 	httpapi.Register(api, service.New(store), token, log)
@@ -116,7 +122,11 @@ func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := handle(ctx, key, data); err != nil {
+		topic := catalogTopic
+		if message["event_type"] == "task.published" {
+			topic = taskTopic
+		}
+		if err := handle(ctx, domain.EventPosition{Topic: topic}, key, data); err != nil {
 			t.Fatal(err)
 		}
 	}

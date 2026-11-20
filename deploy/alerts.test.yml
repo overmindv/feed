@@ -1,0 +1,46 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'feed_quarantine_oldest_pending_seconds{instance="feed-1",job="feed"}'
+        values: '0 60 120 180 240 300 360 0'
+      - series: 'feed_quarantine_oldest_pending_seconds{instance="feed-2",job="feed"}'
+        values: '0 60 120 180 240 300 360 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: FeedEventQuarantinePending
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: FeedEventQuarantinePending
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: feed
+            exp_annotations:
+              summary: "Feed has an activity event awaiting replay"
+              description: "The oldest open rejection is over five minutes old. Check the Feed quarantine journal."
+      - eval_time: 7m
+        alertname: FeedEventQuarantinePending
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'feed_quarantine_oldest_pending_seconds{instance="feed-1",job="feed"}'
+        values: 'NaN NaN NaN NaN NaN NaN 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: FeedEventQuarantineMetricFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: feed-1
+              job: feed
+            exp_annotations:
+              summary: "Feed cannot read the quarantine journal"
+              description: "Check database connectivity and migration 000006."
+      - eval_time: 6m
+        alertname: FeedEventQuarantineMetricFailed
+        exp_alerts: []

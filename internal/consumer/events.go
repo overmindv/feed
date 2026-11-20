@@ -75,29 +75,36 @@ type envelopeMeta struct {
 }
 
 type event struct {
+	source  string
 	task    *domain.TaskPublication
 	catalog *domain.CatalogChange
 }
 
+const maxEventSize = 1 << 20
+
 func decodeEvent(key string, value []byte) (event, error) {
-	if len(value) > 1<<20 {
-		return event{}, fmt.Errorf("feed event is too large")
+	if len(value) > maxEventSize {
+		return event{}, domain.RejectTooLarge
 	}
 	var meta envelopeMeta
 	if err := json.Unmarshal(value, &meta); err != nil {
-		return event{}, fmt.Errorf("parse feed envelope: %w", err)
+		return event{}, domain.RejectInvalidJSON
 	}
 	switch {
 	case strings.HasPrefix(meta.EventType, "catalog."):
 		change, err := decodeCatalog(key, value)
-
-		return event{catalog: change}, err
+		if err != nil && err != domain.RejectUnknownType {
+			err = domain.RejectInvalidCatalog
+		}
+		return event{source: "catalog", catalog: change}, err
 	case strings.HasPrefix(meta.EventType, "task."):
 		publication, err := decodeTaskPublication(key, value)
-
-		return event{task: publication}, err
+		if err != nil && err != domain.RejectUnknownType {
+			err = domain.RejectInvalidTask
+		}
+		return event{source: "task", task: publication}, err
 	default:
-		return event{}, fmt.Errorf("unknown feed event type")
+		return event{}, domain.RejectUnknownType
 	}
 }
 
@@ -116,8 +123,13 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	}
 	switch action {
 	case "created", "updated", "unpublished", "deleted":
+	case "prerequisite.added", "prerequisite.removed":
+		if e.AggregateType == "topic" {
+			return nil, nil
+		}
+		fallthrough
 	default:
-		return nil, nil
+		return nil, domain.RejectUnknownType
 	}
 	if e.CatalogRevision == 0 && e.AggregateVersion == 0 {
 		return nil, nil
@@ -149,7 +161,7 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	if name == "" {
 		name = strings.TrimSpace(e.Payload.Title)
 	}
-	if name == "" {
+	if name == "" || strings.ContainsRune(name, 0) {
 		return nil, fmt.Errorf("catalog event has no public title")
 	}
 	const maxTitleRunes = 256
@@ -193,11 +205,19 @@ func decodeTaskPublication(key string, value []byte) (*domain.TaskPublication, e
 	if err := json.Unmarshal(value, &e); err != nil {
 		return nil, fmt.Errorf("parse task envelope: %w", err)
 	}
-	if e.EventType != "task.published" {
+	switch e.EventType {
+	case "task.published":
+	case "task.unpublished":
 		return nil, nil
+	default:
+		return nil, domain.RejectUnknownType
 	}
 	if !validUUID(e.TaskID) || (key != "" && key != e.TaskID) || e.OccurredAt.IsZero() {
 		return nil, fmt.Errorf("invalid task activity metadata")
+	}
+	if strings.ContainsRune(e.Title, 0) || strings.ContainsRune(e.TaskType, 0) ||
+		strings.ContainsRune(e.Difficulty, 0) || (e.TopicID != nil && strings.ContainsRune(*e.TopicID, 0)) {
+		return nil, fmt.Errorf("invalid task activity fields")
 	}
 	eventID, err := parseEventID(e.EventID)
 	if err != nil {
