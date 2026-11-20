@@ -17,6 +17,7 @@ func main() {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+
 		return
 	}
 	os.Exit(parker.Main(run, parker.WithAppName("feed")))

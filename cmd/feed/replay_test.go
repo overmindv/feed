@@ -7,6 +7,8 @@ import (
 )
 
 func TestParseReplayPosition(t *testing.T) {
+	t.Parallel()
+
 	position, unverified, err := parseReplayPosition([]string{"-topic", "task.activity.v1", "-partition", "2", "-offset", "9876543210", "-allow-unverified"})
 	if err != nil || !unverified || position != (domain.EventPosition{Topic: "task.activity.v1", Partition: 2, Offset: 9876543210}) {
 		t.Fatal(position, unverified, err)

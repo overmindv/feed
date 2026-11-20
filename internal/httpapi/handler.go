@@ -12,7 +12,7 @@ import (
 	"github.com/overmindv/feed/internal/service"
 )
 
-const serviceTokenHeader = "X-Feed-Service-Token"
+const serviceTokenHeader = "X-Feed-Service-Token" //nolint:gosec // имя HTTP-заголовка, не credential
 
 // Handler — внутренний HTTP API ленты.
 type Handler struct {
@@ -59,6 +59,7 @@ func (h *Handler) auth(next http.Handler) http.Handler {
 		values := r.Header.Values(serviceTokenHeader)
 		if h.gatewayToken == "" || len(values) != 1 || subtle.ConstantTimeCompare([]byte(values[0]), []byte(h.gatewayToken)) != 1 {
 			writeJSON(w, http.StatusForbidden, apperror.New(apperror.PermissionDenied, "внутренний вызов не авторизован", http.StatusForbidden))
+
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -73,6 +74,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	items, err := h.service.ListFeed(r.Context(), limit, offset)
 	if err != nil {
 		h.writeError(w, err)
+
 		return
 	}
 
@@ -95,6 +97,7 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 	var public *apperror.Error
 	if errors.As(err, &public) {
 		writeJSON(w, public.Status, public)
+
 		return
 	}
 	h.logger.Error("внутренняя ошибка Feed", "error", err)
