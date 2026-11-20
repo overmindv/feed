@@ -2,148 +2,146 @@ package consumer
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
+
+const courseID = "22222222-2222-2222-2222-222222222222"
 
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatal(err)
 	}
+
 	return data
 }
 
-func TestRenderCatalogCreated(t *testing.T) {
-	ts := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
-	value := mustJSON(t, map[string]any{
-		"event_type":     "catalog.course.created",
-		"occurred_at":    ts,
-		"actor_user_id":  "11111111-1111-1111-1111-111111111111",
-		"aggregate_type": "course",
-		"aggregate_id":   "22222222-2222-2222-2222-222222222222",
-		"payload": map[string]any{
-			"name": "Алгоритмы", "status": "draft",
+func catalogFixture() map[string]any {
+	return map[string]any{
+		"event_type":        "catalog.course.created",
+		"occurred_at":       time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC),
+		"actor_user_id":     "11111111-1111-1111-1111-111111111111",
+		"aggregate_type":    "course",
+		"aggregate_id":      courseID,
+		"catalog_revision":  3,
+		"aggregate_version": 2,
+		"payload":           map[string]any{"name": "Алгоритмы", "status": "active"},
+		"feed_visibility": map[string]any{
+			"visible":   true,
+			"ancestors": []string{"program:33333333-3333-3333-3333-333333333333"},
 		},
-	})
-
-	item, ok, err := Render("", value)
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if !ok {
-		t.Fatal("created должен попадать в ленту")
-	}
-	if item.Kind != "course.created" {
-		t.Errorf("kind = %q, want course.created", item.Kind)
-	}
-	if item.Title != "Новый курс: Алгоритмы" {
-		t.Errorf("title = %q", item.Title)
-	}
-	if item.Href != "/courses/22222222-2222-2222-2222-222222222222" {
-		t.Errorf("href = %q", item.Href)
-	}
-	if item.Source != "catalog" || item.EventKey != "22222222-2222-2222-2222-222222222222" {
-		t.Errorf("source/event_key = %q/%q", item.Source, item.EventKey)
 	}
 }
 
-func TestRenderCatalogActivated(t *testing.T) {
-	value := mustJSON(t, map[string]any{
-		"event_type":     "catalog.university.updated",
-		"occurred_at":    time.Now().UTC(),
-		"actor_user_id":  "11111111-1111-1111-1111-111111111111",
-		"aggregate_type": "university",
-		"aggregate_id":   "33333333-3333-3333-3333-333333333333",
-		"payload": map[string]any{
-			"name": "МГУ", "status": "active",
-		},
-	})
-
-	item, ok, err := Render("", value)
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if !ok {
-		t.Fatal("activated должен попадать в ленту")
-	}
-	if item.Kind != "university.activated" {
-		t.Errorf("kind = %q, want university.activated", item.Kind)
-	}
-	if item.Title != "Активирован университет: МГУ" {
-		t.Errorf("title = %q", item.Title)
-	}
-}
-
-func TestRenderCatalogFiltered(t *testing.T) {
-	cases := []map[string]any{
-		{ // deleted — не в ленту
-			"event_type": "catalog.topic.deleted", "occurred_at": time.Now().UTC(),
-			"actor_user_id":  "11111111-1111-1111-1111-111111111111",
-			"aggregate_type": "topic", "aggregate_id": "44444444-4444-4444-4444-444444444444",
-			"payload": map[string]any{"id": "x"},
-		},
-		{ // updated, но не active (черновик) — не в ленту
-			"event_type": "catalog.course.updated", "occurred_at": time.Now().UTC(),
-			"actor_user_id":  "11111111-1111-1111-1111-111111111111",
-			"aggregate_type": "course", "aggregate_id": "55555555-5555-5555-5555-555555555555",
-			"payload": map[string]any{"name": "X", "status": "draft"},
-		},
-		{ // prerequisite — не в ленту
-			"event_type": "catalog.topic.prerequisite.added", "occurred_at": time.Now().UTC(),
-			"actor_user_id":  "11111111-1111-1111-1111-111111111111",
-			"aggregate_type": "topic", "aggregate_id": "66666666-6666-6666-6666-666666666666",
-			"payload": map[string]any{},
-		},
-	}
-	for i, tc := range cases {
-		value := mustJSON(t, tc)
-		_, ok, err := Render("", value)
-		if err != nil {
-			t.Fatalf("case %d: render: %v", i, err)
+func TestCatalogShowsOnlyConfirmedPublicEvents(t *testing.T) {
+	for _, action := range []string{"created", "updated"} {
+		fixture := catalogFixture()
+		fixture["event_type"] = "catalog.course." + action
+		message, err := decodeEvent(courseID, mustJSON(t, fixture))
+		if err != nil || message.catalog == nil || message.catalog.Item == nil {
+			t.Fatal("public event was not rendered", err)
 		}
-		if ok {
-			t.Errorf("case %d: ожидали фильтрацию (ok=false), получено ok=true", i)
+		item := message.catalog.Item
+		if item.Href != "/courses/"+courseID || item.EventKey != "course:"+courseID || len(item.RawPayload) != 0 ||
+			item.Text != "Алгоритмы" || message.catalog.CatalogRevision != 3 || message.catalog.AggregateVersion != 2 ||
+			len(message.catalog.Ancestors) != 1 {
+			t.Error("unexpected public card", item)
+		}
+		kind := "course.created"
+		if action == "updated" {
+			kind = "course.activated"
+		}
+		if item.Kind != kind {
+			t.Error("unexpected card kind", item.Kind)
 		}
 	}
 }
 
-func TestRenderTaskPublished(t *testing.T) {
-	value := mustJSON(t, map[string]any{
-		"event_type":  "task.published",
-		"occurred_at": time.Now().UTC(),
-		"task_id":     "77777777-7777-7777-7777-777777777777",
-		"title":       "Двоичный поиск",
-		"topic_id":    nil,
-		"task_type":   "programming",
-		"difficulty":  "easy",
-	})
-
-	item, ok, err := Render("", value)
-	if err != nil {
-		t.Fatalf("render: %v", err)
+func TestCatalogHidesDraftArchiveDeleteAndInheritedVisibility(t *testing.T) {
+	tests := []struct {
+		action string
+		status string
+		public bool
+	}{
+		{action: "created", status: "draft", public: true},
+		{action: "updated", status: "archived", public: true},
+		{action: "updated", status: "active", public: false},
+		{action: "unpublished", status: "hidden", public: false},
+		{action: "deleted", status: "", public: false},
 	}
-	if !ok {
-		t.Fatal("task.published должен попадать в ленту")
-	}
-	if item.Kind != "task.published" {
-		t.Errorf("kind = %q, want task.published", item.Kind)
-	}
-	if item.Title != "Новая задача: Двоичный поиск" {
-		t.Errorf("title = %q", item.Title)
-	}
-	if item.Href != "/tasks/77777777-7777-7777-7777-777777777777" {
-		t.Errorf("href = %q", item.Href)
-	}
-	if item.Source != "task" || item.EventKey != "77777777-7777-7777-7777-777777777777" {
-		t.Errorf("source/event_key = %q/%q", item.Source, item.EventKey)
+	for _, tc := range tests {
+		fixture := catalogFixture()
+		fixture["event_type"] = "catalog.course." + tc.action
+		fixture["payload"] = map[string]any{"name": "не для ленты", "status": tc.status}
+		fixture["feed_visibility"] = map[string]any{"visible": tc.public, "ancestors": []string{}}
+		message, err := decodeEvent(courseID, mustJSON(t, fixture))
+		if err != nil || message.catalog == nil || message.catalog.Item != nil {
+			t.Error("expected visibility fence without card", tc, err)
+		}
 	}
 }
 
-func TestRenderUnknownEventType(t *testing.T) {
-	value := mustJSON(t, map[string]any{"event_type": "other.thing", "occurred_at": time.Now().UTC()})
-	if _, _, err := Render("", value); err == nil {
-		t.Fatal("ожидали ошибку для неизвестного event_type")
+func TestCatalogIgnoresLegacyPublicationAndChecksResourceIdentity(t *testing.T) {
+	fixture := catalogFixture()
+	delete(fixture, "feed_visibility")
+	message, err := decodeEvent(courseID, mustJSON(t, fixture))
+	if err != nil || message.catalog == nil || message.catalog.Item != nil {
+		t.Error("legacy publication did not fail closed", err)
+	}
+	delete(fixture, "catalog_revision")
+	delete(fixture, "aggregate_version")
+	message, err = decodeEvent(courseID, mustJSON(t, fixture))
+	if err != nil || message.catalog != nil {
+		t.Error("unversioned event did not fail closed", err)
+	}
+	fixture = catalogFixture()
+	if _, err := decodeEvent("other", mustJSON(t, fixture)); err == nil {
+		t.Error("mismatched Kafka key accepted")
+	}
+	fixture["feed_visibility"] = map[string]any{"visible": true, "ancestors": []string{"course:" + courseID}}
+	if _, err := decodeEvent(courseID, mustJSON(t, fixture)); err == nil {
+		t.Error("resource is its own ancestor")
+	}
+	fixture["event_type"] = "catalog.topic.created"
+	if _, err := decodeEvent(courseID, mustJSON(t, fixture)); err == nil {
+		t.Error("mismatched entity type accepted")
+	}
+}
+
+func TestCatalogDoesNotRenderPrerequisite(t *testing.T) {
+	fixture := catalogFixture()
+	fixture["aggregate_type"] = "topic"
+	fixture["event_type"] = "catalog.topic.prerequisite.added"
+	message, err := decodeEvent(courseID, mustJSON(t, fixture))
+	if err != nil || message.catalog != nil {
+		t.Error("prerequisite affected visibility", err)
+	}
+}
+
+func TestTaskPublishedRemainsVisible(t *testing.T) {
+	id := "77777777-7777-7777-7777-777777777777"
+	message, err := decodeEvent(id, mustJSON(t, map[string]any{
+		"event_type": "task.published",
+		"task_id":    id,
+		"title":      "Двоичный поиск",
+	}))
+	if err != nil || message.task == nil {
+		t.Fatal("task publication was not rendered", err)
+	}
+	item := message.task
+	if item.Title != "Новая задача: Двоичный поиск" || item.Source != "task" ||
+		item.EventKey != id || item.Href != "/tasks/"+id {
+		t.Error("unexpected task card", item)
+	}
+}
+
+func TestUnknownAndOversizedEvents(t *testing.T) {
+	for _, value := range [][]byte{[]byte("{\"event_type\":\"other.thing\"}"), []byte(strings.Repeat(" ", (1<<20)+1))} {
+		if _, err := decodeEvent("", value); err == nil {
+			t.Error("invalid event was accepted")
+		}
 	}
 }

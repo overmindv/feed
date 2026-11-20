@@ -11,12 +11,21 @@ import (
 
 // catalogEnvelope — конверт события каталога от entities (topic catalog.activity.v1).
 type catalogEnvelope struct {
-	EventType     string          `json:"event_type"`
-	OccurredAt    time.Time       `json:"occurred_at"`
-	ActorUserID   string          `json:"actor_user_id"`
-	AggregateType string          `json:"aggregate_type"`
-	AggregateID   string          `json:"aggregate_id"`
-	Payload       json.RawMessage `json:"payload"`
+	EventType        string          `json:"event_type"`
+	OccurredAt       time.Time       `json:"occurred_at"`
+	ActorUserID      string          `json:"actor_user_id"`
+	AggregateType    string          `json:"aggregate_type"`
+	AggregateID      string          `json:"aggregate_id"`
+	AggregateVersion int64           `json:"aggregate_version"`
+	CatalogRevision  int64           `json:"catalog_revision"`
+	Visibility       *feedVisibility `json:"feed_visibility"`
+	Payload          catalogPayload  `json:"payload"`
+}
+
+type feedVisibility struct {
+	Visible    bool     `json:"visible"`
+	Ancestors  []string `json:"ancestors"`
+	ScopeReset bool     `json:"scope_reset"`
 }
 
 // catalogPayload — достаточное подмножество строки каталога для рендера ленты.
@@ -63,58 +72,105 @@ type envelopeMeta struct {
 	EventType string `json:"event_type"`
 }
 
-// Render преобразует сообщение из Kafka (value) в запись ленты.
-// ok=false означает, что событие не должно попадать в ленту (отфильтровано).
-func Render(key string, value []byte) (domain.FeedItem, bool, error) {
+type event struct {
+	task    *domain.FeedItem
+	catalog *domain.CatalogChange
+}
+
+func decodeEvent(key string, value []byte) (event, error) {
+	if len(value) > 1<<20 {
+		return event{}, fmt.Errorf("feed event is too large")
+	}
 	var meta envelopeMeta
 	if err := json.Unmarshal(value, &meta); err != nil {
-		return domain.FeedItem{}, false, fmt.Errorf("parse feed envelope: %w", err)
+		return event{}, fmt.Errorf("parse feed envelope: %w", err)
 	}
 	switch {
 	case strings.HasPrefix(meta.EventType, "catalog."):
-		return renderCatalog(key, value)
+		change, err := decodeCatalog(key, value)
+
+		return event{catalog: change}, err
 	case strings.HasPrefix(meta.EventType, "task."):
-		return renderTask(key, value)
+		item, ok, err := renderTask(value)
+		if err != nil || !ok {
+			return event{}, err
+		}
+
+		return event{task: &item}, nil
 	default:
-		return domain.FeedItem{}, false, fmt.Errorf("unknown feed event_type %q", meta.EventType)
+		return event{}, fmt.Errorf("unknown feed event type")
 	}
 }
 
-// renderCatalog фильтрует события каталога и рендерит заголовок/ссылку.
-// В ленту попадают: created всегда; updated — только когда сущность активна
-// (публикация draft→active). Deleted/prerequisite и updated-черновики пропускаются.
-func renderCatalog(key string, value []byte) (domain.FeedItem, bool, error) {
+func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	var e catalogEnvelope
 	if err := json.Unmarshal(value, &e); err != nil {
-		return domain.FeedItem{}, false, fmt.Errorf("parse catalog envelope: %w", err)
+		return nil, fmt.Errorf("parse catalog envelope: %w", err)
 	}
-	if e.EventType == "" || e.AggregateID == "" {
-		return domain.FeedItem{}, false, fmt.Errorf("catalog event без event_type/aggregate_id")
+	if !catalogKind(e.AggregateType) || !validCatalogID(e.AggregateID) || (key != "" && key != e.AggregateID) {
+		return nil, fmt.Errorf("invalid catalog aggregate key")
+	}
+	prefix := "catalog." + e.AggregateType + "."
+	action, ok := strings.CutPrefix(e.EventType, prefix)
+	if !ok {
+		return nil, fmt.Errorf("catalog aggregate type does not match the event")
+	}
+	switch action {
+	case "created", "updated", "unpublished", "deleted":
+	default:
+		return nil, nil
+	}
+	if e.CatalogRevision == 0 && e.AggregateVersion == 0 {
+		return nil, nil
+	}
+	if e.CatalogRevision < 1 || e.AggregateVersion < 1 {
+		return nil, fmt.Errorf("invalid catalog event version")
+	}
+	change := &domain.CatalogChange{
+		ResourceKey:      e.AggregateType + ":" + e.AggregateID,
+		CatalogRevision:  e.CatalogRevision,
+		AggregateVersion: e.AggregateVersion,
+	}
+	if action == "deleted" || action == "unpublished" || e.Payload.Status != "active" ||
+		e.Visibility == nil || !e.Visibility.Visible {
+		return change, nil
+	}
+	if e.Visibility.Ancestors == nil || !validAncestorKeys(change.ResourceKey, e.Visibility.Ancestors) {
+		return nil, fmt.Errorf("invalid catalog ancestors")
+	}
+	if e.OccurredAt.IsZero() || (e.ActorUserID != "" && !validCatalogID(e.ActorUserID)) {
+		return nil, fmt.Errorf("invalid catalog activity metadata")
+	}
+	name := strings.TrimSpace(e.Payload.Name)
+	if name == "" {
+		name = strings.TrimSpace(e.Payload.Title)
+	}
+	if name == "" {
+		return nil, fmt.Errorf("catalog event has no public title")
+	}
+	const maxTitleRunes = 256
+	runes := 0
+	for offset := range name {
+		if runes == maxTitleRunes {
+			name = name[:offset]
+			break
+		}
+		runes++
 	}
 
 	aggregate := e.AggregateType
-	name := aggregateName(e.Payload)
-	activated := strings.HasSuffix(e.EventType, ".updated") && payloadActive(e.Payload)
-
-	var kind string
-	switch {
-	case strings.HasSuffix(e.EventType, ".created"):
-		kind = aggregate + ".created"
-	case activated:
-		kind = aggregate + ".activated"
-	default:
-		// deleted / prerequisite.* / updated-не-active — в ленту не публикуем.
-		return domain.FeedItem{}, false, nil
-	}
-
+	kind := aggregate + ".created"
 	mask := "Новый %s: %s"
-	if activated {
+	if action == "updated" {
+		kind = aggregate + ".activated"
 		mask = "Активирован %s: %s"
 	}
 
-	return domain.FeedItem{
+	change.ScopeReset = e.Visibility.ScopeReset
+	change.Ancestors = e.Visibility.Ancestors
+	change.Item = &domain.FeedItem{
 		Source:        "catalog",
-		EventKey:      e.AggregateID,
+		EventKey:      change.ResourceKey,
 		Kind:          kind,
 		ActorUserID:   e.ActorUserID,
 		AggregateType: aggregate,
@@ -123,13 +179,14 @@ func renderCatalog(key string, value []byte) (domain.FeedItem, bool, error) {
 		Title:         fmt.Sprintf(mask, aggregatorName(aggregate), name),
 		Text:          strings.TrimSpace(name),
 		Href:          "/" + aggregate + "s/" + e.AggregateID,
-		RawPayload:    e.Payload,
-	}, true, nil
+	}
+
+	return change, nil
 }
 
 // renderTask рендерит публикацию задачи. Событий сразу «published»-типа нет —
 // принимаем любой task-конверт как факт публикации.
-func renderTask(key string, value []byte) (domain.FeedItem, bool, error) {
+func renderTask(value []byte) (domain.FeedItem, bool, error) {
 	var e taskEnvelope
 	if err := json.Unmarshal(value, &e); err != nil {
 		return domain.FeedItem{}, false, fmt.Errorf("parse task envelope: %w", err)
@@ -166,25 +223,51 @@ func renderTask(key string, value []byte) (domain.FeedItem, bool, error) {
 	}, true, nil
 }
 
-// aggregateName достаёт человекочитаемое имя из payload (name для каталога, title для темы).
-func aggregateName(payload json.RawMessage) string {
-	var p catalogPayload
-	if err := json.Unmarshal(payload, &p); err != nil {
-		return ""
-	}
-	if strings.TrimSpace(p.Name) != "" {
-		return strings.TrimSpace(p.Name)
-	}
-
-	return strings.TrimSpace(p.Title)
-}
-
-// payloadActive определяет, стала ли сущность активной (опубликованной).
-func payloadActive(payload json.RawMessage) bool {
-	var p catalogPayload
-	if err := json.Unmarshal(payload, &p); err != nil {
+func catalogKind(kind string) bool {
+	switch kind {
+	case "university", "program", "course", "topic":
+		return true
+	default:
 		return false
 	}
+}
 
-	return p.Status == "active"
+func validCatalogID(id string) bool {
+	if len(id) != 36 || id == "00000000-0000-0000-0000-000000000000" {
+		return false
+	}
+	for i := range len(id) {
+		c := id[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func validAncestorKeys(self string, keys []string) bool {
+	if len(keys) > 127 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		kind, id, ok := strings.Cut(key, ":")
+		if !ok || key == self || !catalogKind(kind) || !validCatalogID(id) {
+			return false
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return false
+		}
+		seen[key] = struct{}{}
+	}
+
+	return true
 }

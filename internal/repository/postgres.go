@@ -28,6 +28,9 @@ func (r *Postgres) Ping(ctx context.Context) error {
 // InsertItem вставляет запись ленты; false если такой (source, event_key, kind)
 // уже существует — на конфликте ничего не делаем и не считаем это ошибкой.
 func (r *Postgres) InsertItem(ctx context.Context, item domain.FeedItem) (bool, error) {
+	if item.Source == "catalog" {
+		return false, errors.New("catalog item requires a visibility update")
+	}
 	payload, err := json.Marshal(item.RawPayload)
 	if err != nil {
 		return false, fmt.Errorf("сериализовать raw payload: %w", err)
@@ -69,7 +72,14 @@ func (r *Postgres) ListItems(ctx context.Context, limit, offset int) ([]domain.F
 	rows, err := r.pool.Query(ctx, `
 		SELECT id::text, source, event_key, kind, COALESCE(actor_user_id::text, ''),
 		       aggregate_type, aggregate_id, occurred_at, title, text, href, raw_payload
-		FROM feed_items
+		FROM feed_items f
+		WHERE (f.source <> 'catalog' OR f.catalog_revision IS NOT NULL)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM feed_catalog_visibility AS visibility
+		    WHERE visibility.resource_key = ANY(f.visibility_keys)
+		      AND visibility.fence_revision > 0
+		      AND visibility.fence_revision > f.catalog_revision
+		  )
 		ORDER BY occurred_at DESC, id DESC
 		LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {

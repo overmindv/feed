@@ -8,6 +8,19 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: feed_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - "5432"
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d feed_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,5 +30,10 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.11.4
-      - run: make test
+      - name: Test with PostgreSQL
+        env:
+          DATABASE_URL: postgres://postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/feed_test?sslmode=disable
+        run: |
+          go run ./cmd/feed migrate --dir migrations up
+          FEED_TEST_DSN="$DATABASE_URL" make test
       - run: make build

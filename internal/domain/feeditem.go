@@ -24,3 +24,12 @@ type FeedItem struct {
 	Href          string
 	RawPayload    json.RawMessage
 }
+
+type CatalogChange struct {
+	ResourceKey      string
+	CatalogRevision  int64
+	AggregateVersion int64
+	ScopeReset       bool
+	Ancestors        []string
+	Item             *FeedItem
+}

@@ -55,8 +55,9 @@ func Register(router Router, feed *service.Service, gatewayToken string, logger 
 // auth проверяет X-Feed-Service-Token (gateway → feed).
 func (h *Handler) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get(serviceTokenHeader)
-		if len(token) != len(h.gatewayToken) || subtle.ConstantTimeCompare([]byte(token), []byte(h.gatewayToken)) != 1 {
+		w.Header().Set("Cache-Control", "no-store")
+		values := r.Header.Values(serviceTokenHeader)
+		if h.gatewayToken == "" || len(values) != 1 || subtle.ConstantTimeCompare([]byte(values[0]), []byte(h.gatewayToken)) != 1 {
 			writeJSON(w, http.StatusForbidden, apperror.New(apperror.PermissionDenied, "внутренний вызов не авторизован", http.StatusForbidden))
 			return
 		}
