@@ -15,6 +15,7 @@ import (
 
 const correctedTask = `{"event_id":"22110000-0000-0000-0000-000000000001","event_type":"task.published","task_id":"22110000-0000-0000-0000-000000000002","occurred_at":"2026-09-12T10:00:00Z","title":"Binary search"}`
 
+//nolint:paralleltest // component-тест использует PostgreSQL и Kafka position
 func TestQuarantineRetryAndDuplicate(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
@@ -45,6 +46,7 @@ func TestQuarantineRetryAndDuplicate(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // component-тест проверяет транзакционную гонку PostgreSQL
 func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
@@ -92,14 +94,14 @@ func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 	}
 	var applied, duplicates int
 	for range cap(results) {
-		err := <-results
+		replayErr := <-results
 		switch {
-		case err == nil:
+		case replayErr == nil:
 			applied++
-		case errors.Is(err, repository.ErrAlreadyReplayed):
+		case errors.Is(replayErr, repository.ErrAlreadyReplayed):
 			duplicates++
 		default:
-			t.Fatal(err)
+			t.Fatal(replayErr)
 		}
 	}
 	if applied != 1 || duplicates != 1 {
@@ -118,6 +120,7 @@ func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // component-тест использует PostgreSQL и Kafka position
 func TestQuarantineUnverifiedReplayRequiresConfirmation(t *testing.T) {
 	ctx := t.Context()
 	store := repository.New(feedTestPool(t))

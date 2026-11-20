@@ -12,6 +12,7 @@ import (
 	"github.com/overmindv/feed/internal/repository"
 )
 
+//nolint:paralleltest // component-тест использует PostgreSQL и миграции
 func TestInboxSeparatesPublicationFromDelivery(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
@@ -143,6 +144,7 @@ func TestInboxSeparatesPublicationFromDelivery(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // component-тест переключает версии схемы PostgreSQL
 func TestInboxMigrationKeepsOldPublicationIdentity(t *testing.T) {
 	ctx := t.Context()
 	pool, migrate := feedTestSchema(t)
@@ -169,8 +171,8 @@ func TestInboxMigrationKeepsOldPublicationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := handle(ctx, domain.EventPosition{Topic: taskTopic}, taskID, value); err != nil {
-		t.Fatal(err)
+	if handleErr := handle(ctx, domain.EventPosition{Topic: taskTopic}, taskID, value); handleErr != nil {
+		t.Fatal(handleErr)
 	}
 	rows, err := store.ListItems(ctx, 50, 0)
 	if err != nil {

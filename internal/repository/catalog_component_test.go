@@ -54,18 +54,18 @@ func feedTestSchema(t testing.TB) (*pgxpool.Pool, func(string)) {
 	}
 	t.Cleanup(admin.Close)
 	var schema string
-	if err := admin.QueryRow(t.Context(), "SELECT 'feed_test_' || replace(gen_random_uuid()::text, '-', '')").Scan(&schema); err != nil {
-		t.Fatal(err)
+	if scanErr := admin.QueryRow(t.Context(), "SELECT 'feed_test_' || replace(gen_random_uuid()::text, '-', '')").Scan(&schema); scanErr != nil {
+		t.Fatal(scanErr)
 	}
 	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := admin.Exec(t.Context(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		t.Fatal(err)
+	if _, createErr := admin.Exec(t.Context(), "CREATE SCHEMA "+quotedSchema); createErr != nil {
+		t.Fatal(createErr)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
-			t.Error(err)
+		if _, dropErr := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); dropErr != nil {
+			t.Error(dropErr)
 		}
 	})
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
@@ -90,11 +90,11 @@ func feedMigrationsBeforeInbox(t *testing.T) string {
 	dir := t.TempDir()
 	for _, name := range []string{"000001_feed_items.sql", "000002_feed_items_actor_and_idempotency.sql",
 		"000003_catalog_visibility.sql", "000004_feed_public_window.sql"} {
-		source, err := os.ReadFile(filepath.Join("../../migrations", name))
+		source, err := os.ReadFile(filepath.Join("../../migrations", name)) //nolint:gosec // name задан локальным allowlist
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), source, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), source, 0600); err != nil { //nolint:gosec // name задан локальным allowlist
 			t.Fatal(err)
 		}
 	}
@@ -102,6 +102,7 @@ func feedMigrationsBeforeInbox(t *testing.T) string {
 	return dir
 }
 
+//nolint:paralleltest // component-тест использует PostgreSQL и миграции
 func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
