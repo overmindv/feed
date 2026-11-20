@@ -29,6 +29,7 @@ func (r *Postgres) SaveRejection(ctx context.Context, rejection domain.EventReje
 	if err != nil {
 		return false, fmt.Errorf("save rejection: %w", err)
 	}
+
 	return tag.RowsAffected() == 1, nil
 }
 
@@ -39,6 +40,7 @@ func (r *Postgres) OldestRejectionAge(ctx context.Context) (float64, error) {
 			SELECT rejected_at FROM feed_event_quarantine
 			WHERE replayed_at IS NULL ORDER BY rejected_at LIMIT 1
 		))), 0), 0)::float8`).Scan(&age)
+
 	return age, err
 }
 
@@ -67,8 +69,8 @@ func (r *Postgres) ReplayRejection(
 			return ErrAlreadyReplayed
 		}
 		copy(identity.Hash[:], hash)
-		if err := apply(ctx, source, identity, activityWriter{db: tx}); err != nil {
-			return err
+		if applyErr := apply(ctx, source, identity, activityWriter{db: tx}); applyErr != nil {
+			return applyErr
 		}
 		_, err = tx.Exec(ctx, `
 			UPDATE feed_event_quarantine SET replayed_at = clock_timestamp(), replayed_by = $4
@@ -77,6 +79,7 @@ func (r *Postgres) ReplayRejection(
 		if err != nil {
 			return fmt.Errorf("mark rejection replayed: %w", err)
 		}
+
 		return nil
 	})
 }

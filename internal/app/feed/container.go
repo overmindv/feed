@@ -30,8 +30,8 @@ func Build(app *parker.App) error {
 	store := repository.New(pool)
 	feedService := service.New(store)
 	if metrics := app.Metrics(); metrics != nil {
-		if err := metrics.Register(oldestRejectionAge(store)); err != nil {
-			return err
+		if registerErr := metrics.Register(oldestRejectionAge(store)); registerErr != nil {
+			return registerErr
 		}
 	}
 
@@ -43,6 +43,7 @@ func Build(app *parker.App) error {
 			if !ok {
 				return errors.New("missing kafka position")
 			}
+
 			return handle(ctx, domain.EventPosition(position), key, value)
 		})
 	if err != nil {
@@ -52,5 +53,6 @@ func Build(app *parker.App) error {
 
 	httpapi.Register(app.HTTP(), feedService, cfg.GatewayToken, app.Logger())
 	app.AddRunnable("kafka-feed", subscriber.Run)
+
 	return nil
 }

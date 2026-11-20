@@ -26,12 +26,13 @@ func rejectionIdentity(source, key string, value []byte) domain.RejectionIdentit
 		return hashIdentity(entityIdentity, key)
 	}
 	entity := ids.AggregateID
-	if source == "task" {
+	if source == sourceTask {
 		entity = ids.TaskID
 	}
 	if validUUID(entity) {
 		return hashIdentity(entityIdentity, entity)
 	}
+
 	return domain.RejectionIdentity{}
 }
 
@@ -49,6 +50,7 @@ func (e event) identity(kind string) domain.RejectionIdentity {
 			uuid = e.catalog.EventID
 		}
 	}
+
 	return hashIdentity(kind, uuid)
 }
 

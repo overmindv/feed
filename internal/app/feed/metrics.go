@@ -23,6 +23,7 @@ func oldestRejectionAge(store rejectionAgeReader) prometheus.GaugeFunc {
 		if err != nil {
 			return math.NaN()
 		}
+
 		return age
 	})
 }

@@ -69,5 +69,6 @@ func parseReplayPosition(args []string) (domain.EventPosition, bool, error) {
 		!topicName.MatchString(*topic) || *partition < 0 || *partition > 1<<31-1 || *offset < 0 {
 		return domain.EventPosition{}, false, errors.New("usage: feed replay -topic TOPIC -partition PARTITION -offset OFFSET [-allow-unverified] < corrected.json")
 	}
+
 	return domain.EventPosition{Topic: *topic, Partition: int32(*partition), Offset: *offset}, *allowUnverified, nil
 }
