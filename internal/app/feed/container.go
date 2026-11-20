@@ -27,7 +27,7 @@ func Build(app *parker.App) error {
 		return err
 	}
 
-	store := repository.New(pool)
+	store := repository.New(pool, cfg.MaterialCardsEnabled)
 	feedService := service.New(store)
 	if metrics := app.Metrics(); metrics != nil {
 		if registerErr := metrics.Register(oldestRejectionAge(store)); registerErr != nil {
@@ -35,9 +35,9 @@ func Build(app *parker.App) error {
 		}
 	}
 
-	handle := consumer.NewHandler(store, app.Logger(), cfg.CatalogActivityTopic, cfg.TaskActivityTopic)
+	handle := consumer.NewHandler(store, app.Logger(), cfg.CatalogActivityTopic, cfg.TaskActivityTopic, cfg.MaterialActivityTopic)
 	subscriber, err := app.NewSubscriber(cfg.ConsumerGroup,
-		[]string{cfg.CatalogActivityTopic, cfg.TaskActivityTopic},
+		cfg.ActivityTopics(),
 		func(ctx context.Context, key string, value []byte) error {
 			position, ok := parker.PositionFromContext(ctx)
 			if !ok {

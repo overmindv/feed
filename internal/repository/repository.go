@@ -18,4 +18,5 @@ type Repository interface {
 type ActivityWriter interface {
 	ApplyTaskPublication(ctx context.Context, publication domain.TaskPublication) error
 	ApplyCatalogChange(ctx context.Context, change domain.CatalogChange) error
+	ApplyMaterialChange(ctx context.Context, change domain.MaterialChange) error
 }

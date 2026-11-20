@@ -10,10 +10,16 @@ import (
 )
 
 var (
-	ErrNoActivity         = errors.New("event does not affect the feed")
-	ErrIdentityMismatch   = errors.New("corrected event does not match the quarantined identity")
-	ErrIdentityUnverified = errors.New("no identity available; verify the original record before using -allow-unverified")
+	ErrNoActivity          = errors.New("event does not affect the feed")
+	ErrIdentityMismatch    = errors.New("corrected event does not match the quarantined identity")
+	ErrIdentityUnverified  = errors.New("no identity available; verify the original record before using -allow-unverified")
+	ErrMaterialUnconfirmed = errors.New("verify the published revision with Content before using -confirm-material-publication")
 )
+
+type ReplayOptions struct {
+	AllowUnverified            bool
+	ConfirmMaterialPublication bool
+}
 
 type replayStore interface {
 	ReplayRejection(context.Context, domain.EventPosition, func(context.Context, string, domain.RejectionIdentity, repository.ActivityWriter) error) error
@@ -31,20 +37,22 @@ func ReadReplayPayload(input io.Reader) ([]byte, error) {
 	return payload, nil
 }
 
-func Replay(ctx context.Context, store replayStore, p domain.EventPosition, payload []byte, allowUnverified bool) error {
+func Replay(ctx context.Context, store replayStore, p domain.EventPosition, payload []byte, options ReplayOptions) error {
 	return store.ReplayRejection(ctx, p, func(ctx context.Context, source string, identity domain.RejectionIdentity, writer repository.ActivityWriter) error {
 		message, err := decodeForSource(source, "", payload)
 		if err != nil {
 			return err
 		}
-		if message.catalog == nil && message.task == nil {
+		if message.catalog == nil && message.task == nil && message.material == nil {
 			return ErrNoActivity
 		}
 		switch {
 		case identity.Kind != "" && message.identity(identity.Kind) != identity:
 			return ErrIdentityMismatch
-		case identity.Kind == "" && !allowUnverified:
+		case identity.Kind == "" && !options.AllowUnverified:
 			return ErrIdentityUnverified
+		case message.material != nil && message.material.RevisionID != "" && !options.ConfirmMaterialPublication:
+			return ErrMaterialUnconfirmed
 		}
 
 		return message.apply(ctx, writer)

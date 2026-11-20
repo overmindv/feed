@@ -49,6 +49,11 @@ func (e event) identity(kind string) domain.RejectionIdentity {
 		if kind == eventIdentity {
 			uuid = e.catalog.EventID
 		}
+	case e.material != nil:
+		uuid = e.material.MaterialID
+		if kind == eventIdentity {
+			uuid = e.material.EventID
+		}
 	}
 
 	return hashIdentity(kind, uuid)

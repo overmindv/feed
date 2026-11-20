@@ -3,12 +3,13 @@ package domain
 type RejectionReason string
 
 const (
-	RejectTooLarge       RejectionReason = "too_large"
-	RejectInvalidJSON    RejectionReason = "invalid_json"
-	RejectUnknownType    RejectionReason = "unknown_type"
-	RejectInvalidCatalog RejectionReason = "invalid_catalog"
-	RejectInvalidTask    RejectionReason = "invalid_task"
-	RejectWrongSource    RejectionReason = "wrong_source"
+	RejectTooLarge        RejectionReason = "too_large"
+	RejectInvalidJSON     RejectionReason = "invalid_json"
+	RejectUnknownType     RejectionReason = "unknown_type"
+	RejectInvalidCatalog  RejectionReason = "invalid_catalog"
+	RejectInvalidTask     RejectionReason = "invalid_task"
+	RejectInvalidMaterial RejectionReason = "invalid_material"
+	RejectWrongSource     RejectionReason = "wrong_source"
 )
 
 func (r RejectionReason) Error() string { return string(r) }

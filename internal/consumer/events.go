@@ -88,9 +88,10 @@ type envelopeMeta struct {
 }
 
 type event struct {
-	source  string
-	task    *domain.TaskPublication
-	catalog *domain.CatalogChange
+	source   string
+	task     *domain.TaskPublication
+	catalog  *domain.CatalogChange
+	material *domain.MaterialChange
 }
 
 const maxEventSize = 1 << 20
@@ -118,6 +119,10 @@ func decodeEvent(key string, value []byte) (event, error) {
 		}
 
 		return event{source: sourceTask, task: publication}, err
+	case strings.HasPrefix(meta.EventType, sourceMaterial+"."):
+		change, err := decodeMaterial(meta.EventType, key, value)
+
+		return event{source: sourceMaterial, material: change}, err
 	default:
 		return event{}, domain.RejectUnknownType
 	}

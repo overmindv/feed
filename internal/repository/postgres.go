@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,7 +13,8 @@ import (
 
 // Postgres — потоковая реализация Repository на pgx/v5.
 type Postgres struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	materialActivity bool
 	activityWriter
 }
 
@@ -23,8 +25,8 @@ type sqlExecutor interface {
 type activityWriter struct{ db sqlExecutor }
 
 // New создаёт Postgres-хранилище ленты на переданном пуле соединений.
-func New(pool *pgxpool.Pool) *Postgres {
-	return &Postgres{pool: pool, activityWriter: activityWriter{db: pool}}
+func New(pool *pgxpool.Pool, materialActivity bool) *Postgres {
+	return &Postgres{pool: pool, materialActivity: materialActivity, activityWriter: activityWriter{db: pool}}
 }
 
 // Ping проверяет доступность хранилища.
@@ -78,8 +80,8 @@ func (r *Postgres) ListItems(ctx context.Context, limit, offset int) ([]domain.F
 		offset = 0
 	}
 
-	rows, err := r.pool.Query(ctx, `
-		SELECT id::text, source, event_key, kind, COALESCE(actor_user_id::text, ''),
+	const projection = `
+		SELECT f.id, source, event_key, kind, COALESCE(actor_user_id::text, '') AS actor_user_id,
 		       aggregate_type, aggregate_id, occurred_at, title, text, href, raw_payload
 		FROM feed_items f
 		WHERE (f.source <> 'catalog' OR f.catalog_revision IS NOT NULL)
@@ -88,9 +90,20 @@ func (r *Postgres) ListItems(ctx context.Context, limit, offset int) ([]domain.F
 		    WHERE visibility.resource_key = ANY(f.visibility_keys)
 		      AND visibility.fence_revision > 0
 		      AND visibility.fence_revision > f.catalog_revision
-		  )
-		ORDER BY occurred_at DESC, id DESC
-		LIMIT $1 OFFSET $2`, limit, offset)
+		  )`
+	const columns = `SELECT id::text, source, event_key, kind, actor_user_id,
+		aggregate_type, aggregate_id, occurred_at, title, text, href, raw_payload FROM (`
+	const window = `) AS items ORDER BY items.occurred_at DESC, items.id DESC LIMIT $1 OFFSET $2`
+	const baseQuery = columns + projection + window
+	const materialQuery = columns + "(" + projection + " ORDER BY f.occurred_at DESC, f.id DESC LIMIT $3)" +
+		" UNION ALL (" + materialFeedRows + " ORDER BY occurred_at DESC, id DESC LIMIT $3)" + window
+	query := baseQuery
+	args := []any{limit, offset}
+	if r.materialActivity {
+		query = materialQuery
+		args = append(args, min(offset, math.MaxInt-limit)+limit)
+	}
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list feed items: %w", err)
 	}

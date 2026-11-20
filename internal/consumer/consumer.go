@@ -16,7 +16,7 @@ type activityStore interface {
 
 type Handler func(context.Context, domain.EventPosition, string, []byte) error
 
-func NewHandler(store activityStore, log *slog.Logger, catalogTopic, taskTopic string) Handler {
+func NewHandler(store activityStore, log *slog.Logger, catalogTopic, taskTopic, materialTopic string) Handler {
 	return func(ctx context.Context, position domain.EventPosition, key string, value []byte) error {
 		var source string
 		switch position.Topic {
@@ -24,6 +24,11 @@ func NewHandler(store activityStore, log *slog.Logger, catalogTopic, taskTopic s
 			source = "catalog"
 		case taskTopic:
 			source = sourceTask
+		case materialTopic:
+			if materialTopic == "" {
+				return errors.New("material activity is disabled")
+			}
+			source = sourceMaterial
 		default:
 			return errors.New("unexpected kafka topic")
 		}
@@ -74,6 +79,9 @@ func (e event) apply(ctx context.Context, writer repository.ActivityWriter) erro
 	}
 	if e.task != nil {
 		return writer.ApplyTaskPublication(ctx, *e.task)
+	}
+	if e.material != nil {
+		return writer.ApplyMaterialChange(ctx, *e.material)
 	}
 
 	return nil

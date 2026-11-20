@@ -19,7 +19,7 @@ import (
 var topicName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,249}$`)
 
 func runReplay(args []string, input io.Reader) error {
-	position, allowUnverified, err := parseReplayPosition(args)
+	position, options, err := parseReplayPosition(args)
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func runReplay(args []string, input io.Reader) error {
 	}
 	defer pool.Close()
 
-	err = consumer.Replay(ctx, repository.New(pool), position, payload, allowUnverified)
+	err = consumer.Replay(ctx, repository.New(pool, false), position, payload, options)
 	var reason domain.RejectionReason
 	switch {
 	case err == nil, errors.Is(err, repository.ErrAlreadyReplayed):
@@ -51,6 +51,8 @@ func runReplay(args []string, input io.Reader) error {
 		return err
 	case errors.Is(err, consumer.ErrIdentityMismatch), errors.Is(err, consumer.ErrIdentityUnverified):
 		return err
+	case errors.Is(err, consumer.ErrMaterialUnconfirmed):
+		return err
 	case errors.As(err, &reason):
 		return reason
 	default:
@@ -58,17 +60,19 @@ func runReplay(args []string, input io.Reader) error {
 	}
 }
 
-func parseReplayPosition(args []string) (domain.EventPosition, bool, error) {
+func parseReplayPosition(args []string) (domain.EventPosition, consumer.ReplayOptions, error) {
 	flags := flag.NewFlagSet("replay", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	topic := flags.String("topic", "", "Kafka topic")
 	partition := flags.Int64("partition", -1, "Kafka partition")
 	offset := flags.Int64("offset", -1, "Kafka offset")
 	allowUnverified := flags.Bool("allow-unverified", false, "allow replay if no original identifier is available")
+	confirmPublication := flags.Bool("confirm-material-publication", false, "confirm that the material publication was verified with Content")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 ||
 		!topicName.MatchString(*topic) || *partition < 0 || *partition > 1<<31-1 || *offset < 0 {
-		return domain.EventPosition{}, false, errors.New("usage: feed replay -topic TOPIC -partition PARTITION -offset OFFSET [-allow-unverified] < corrected.json")
+		return domain.EventPosition{}, consumer.ReplayOptions{}, errors.New("usage: feed replay -topic TOPIC -partition PARTITION -offset OFFSET [-allow-unverified] [-confirm-material-publication] < corrected.json")
 	}
 
-	return domain.EventPosition{Topic: *topic, Partition: int32(*partition), Offset: *offset}, *allowUnverified, nil
+	return domain.EventPosition{Topic: *topic, Partition: int32(*partition), Offset: *offset},
+		consumer.ReplayOptions{AllowUnverified: *allowUnverified, ConfirmMaterialPublication: *confirmPublication}, nil
 }

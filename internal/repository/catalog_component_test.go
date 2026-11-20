@@ -106,14 +106,14 @@ func feedMigrationsBeforeInbox(t *testing.T) string {
 func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
-	store := repository.New(pool)
+	store := repository.New(pool, false)
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO feed_items (source,event_key,kind,aggregate_type,aggregate_id,occurred_at,title,href,raw_payload)
 		VALUES ('catalog','old','course.created','course','old',now(),'old legacy','/courses/old','{}')`); err != nil {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	handle := consumer.NewHandler(store, log, catalogTopic, taskTopic)
+	handle := consumer.NewHandler(store, log, catalogTopic, taskTopic, "")
 	token := strings.Repeat("t", 32)
 	api := http.NewServeMux()
 	httpapi.Register(api, service.New(store), token, log)

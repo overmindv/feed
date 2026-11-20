@@ -19,8 +19,8 @@ const correctedTask = `{"event_id":"22110000-0000-0000-0000-000000000001","event
 func TestQuarantineRetryAndDuplicate(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
-	store := repository.New(pool)
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic)
+	store := repository.New(pool, false)
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "")
 	p := domain.EventPosition{Topic: taskTopic, Partition: 1, Offset: 123}
 	value := []byte(`{"event_type":"task.published","occurred_at":"bad time"}`)
 	execQuarantineFixture(t, pool, "ALTER TABLE feed_event_quarantine ADD CONSTRAINT fixture_block_offset CHECK (record_offset < 100) NOT VALID")
@@ -50,9 +50,9 @@ func TestQuarantineRetryAndDuplicate(t *testing.T) {
 func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
-	store := repository.New(pool)
+	store := repository.New(pool, false)
 	p := domain.EventPosition{Topic: taskTopic, Partition: 1, Offset: 42}
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic)
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "")
 	invalid := strings.Replace(correctedTask, "2026-09-12T10:00:00Z", "bad timestamp", 1)
 	if err := handle(ctx, p, "", []byte(invalid)); err != nil {
 		t.Fatal(err)
@@ -71,14 +71,14 @@ func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 		{strings.Replace(correctedTask, "22110000-0000-0000-0000-000000000001", "22110000-0000-0000-0000-000000000099", 1), consumer.ErrIdentityMismatch},
 		{strings.Repeat("x", 1<<20+1), domain.RejectTooLarge},
 	} {
-		if err := consumer.Replay(ctx, store, p, []byte(tc.data), true); !errors.Is(err, tc.err) {
+		if err := consumer.Replay(ctx, store, p, []byte(tc.data), consumer.ReplayOptions{AllowUnverified: true}); !errors.Is(err, tc.err) {
 			t.Error("wrong replay error", err, tc.err)
 		}
 	}
 
 	// Если обновление журнала не прошло, откатываются также карточка и inbox.
 	execQuarantineFixture(t, pool, "ALTER TABLE feed_event_quarantine ADD CONSTRAINT fixture_block_replay CHECK (replayed_at IS NULL) NOT VALID")
-	if err := consumer.Replay(ctx, store, p, []byte(correctedTask), false); err == nil {
+	if err := consumer.Replay(ctx, store, p, []byte(correctedTask), consumer.ReplayOptions{}); err == nil {
 		t.Fatal("expected failure after applying the corrected event")
 	}
 	var cards, inbox int
@@ -90,7 +90,7 @@ func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 
 	results := make(chan error, 2)
 	for range cap(results) {
-		go func() { results <- consumer.Replay(ctx, store, p, []byte(correctedTask), false) }()
+		go func() { results <- consumer.Replay(ctx, store, p, []byte(correctedTask), consumer.ReplayOptions{}) }()
 	}
 	var applied, duplicates int
 	for range cap(results) {
@@ -123,16 +123,16 @@ func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 //nolint:paralleltest // component-тест использует PostgreSQL и Kafka position
 func TestQuarantineUnverifiedReplayRequiresConfirmation(t *testing.T) {
 	ctx := t.Context()
-	store := repository.New(feedTestPool(t))
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic)
+	store := repository.New(feedTestPool(t), false)
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "")
 	p := domain.EventPosition{Topic: taskTopic, Offset: 51}
 	if err := handle(ctx, p, "", []byte("{")); err != nil {
 		t.Fatal(err)
 	}
-	if err := consumer.Replay(ctx, store, p, []byte(correctedTask), false); !errors.Is(err, consumer.ErrIdentityUnverified) {
+	if err := consumer.Replay(ctx, store, p, []byte(correctedTask), consumer.ReplayOptions{}); !errors.Is(err, consumer.ErrIdentityUnverified) {
 		t.Fatal(err)
 	}
-	if err := consumer.Replay(ctx, store, p, []byte(correctedTask), true); err != nil {
+	if err := consumer.Replay(ctx, store, p, []byte(correctedTask), consumer.ReplayOptions{AllowUnverified: true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -154,7 +154,7 @@ func BenchmarkQuarantineAge(b *testing.B) {
 		INSERT INTO feed_event_quarantine (topic, partition, record_offset, source, reason, payload_size)
 		VALUES ('fixture', 1, 0, 'task', 'invalid_task', 100)`)
 	execQuarantineFixture(b, pool, "ANALYZE feed_event_quarantine")
-	store := repository.New(pool)
+	store := repository.New(pool, false)
 	b.ReportAllocs()
 	for b.Loop() {
 		if _, err := store.OldestRejectionAge(b.Context()); err != nil {
