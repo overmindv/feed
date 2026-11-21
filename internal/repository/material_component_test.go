@@ -23,20 +23,42 @@ const (
 	materialTopic  = "content.material.v1"
 	bookID         = "e1100000-0000-4000-8000-000000000001"
 	revisionID     = "e1100000-0000-4000-8000-000000000002"
+	correctionID   = "e1100000-0000-4000-8000-000000000004"
 	fixtureHeading = "Динамическое программирование"
 	privateMarker  = "fixture-private-user-detail"
 	publishedKind  = "material.published"
+	archivedKind   = "material.archived"
+	withdrawnKind  = "material.withdrawn"
+	restoredKind   = "material.restored"
+	correctedKind  = "material.corrected"
 )
 
 func materialWire(t *testing.T, seq, version int, archive bool) []byte {
 	t.Helper()
 
 	kind := publishedKind
-	payload := map[string]any{"tombstone": archive}
 	if archive {
-		kind = "material.archived"
-	} else {
+		kind = archivedKind
+	}
+
+	return materialLifecycleWire(t, seq, version, kind)
+}
+
+func materialLifecycleWire(t *testing.T, seq, version int, kind string) []byte {
+	t.Helper()
+
+	tombstone := kind == archivedKind || kind == withdrawnKind
+	revision := revisionID
+	payload := map[string]any{"tombstone": tombstone}
+	if !tombstone {
 		payload["metadata"] = map[string]string{"title": fixtureHeading, "description": privateMarker}
+	}
+	switch kind {
+	case withdrawnKind:
+		payload["invalidated_revision_id"] = revisionID
+	case correctedKind:
+		payload["invalidated_revision_id"] = revisionID
+		revision = correctionID
 	}
 	value, err := json.Marshal(map[string]any{
 		"event_id":          fmt.Sprintf("e1100000-0000-4000-8000-%012x", seq+100),
@@ -45,7 +67,7 @@ func materialWire(t *testing.T, seq, version int, archive bool) []byte {
 		"occurred_at":       time.Date(2026, 11, 20, 12, seq, 0, 0, time.UTC),
 		"aggregate_id":      bookID,
 		"aggregate_version": version,
-		"revision_id":       revisionID,
+		"revision_id":       revision,
 		"payload":           payload,
 	})
 	if err != nil {
@@ -130,6 +152,38 @@ func TestMaterialFeedLifecycle(t *testing.T) {
 	}
 	if visible := read(); len(visible) != 1 || visible[0].Href != "/tasks/"+taskID {
 		t.Fatal("a quarantined lifecycle change must hide only materials", visible)
+	}
+}
+
+//nolint:paralleltest // Миграции применяются к общей для component-тестов БД.
+func TestMaterialModerationReplay(t *testing.T) {
+	pool := feedTestPool(t)
+	store := repository.New(pool, true)
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, materialTopic)
+	check := func(offset int64, body []byte, visible bool) {
+		t.Helper()
+		if err := handle(t.Context(), domain.EventPosition{Topic: materialTopic, Offset: offset}, bookID, body); err != nil {
+			t.Fatal(err)
+		}
+		items, err := store.ListItems(t.Context(), 10, 0)
+		if err != nil || (len(items) == 1) != visible {
+			t.Fatal("unexpected material count", len(items), err)
+		}
+	}
+
+	check(1, materialWire(t, 1, 10, false), true)
+	withdrawn := materialLifecycleWire(t, 2, 12, withdrawnKind)
+	check(2, withdrawn, false)
+	corrected := materialLifecycleWire(t, 3, 11, correctedKind)
+	check(3, corrected, false)
+	check(4, materialLifecycleWire(t, 4, 13, restoredKind), true)
+	check(5, withdrawn, true)
+	check(6, corrected, true)
+	check(7, materialLifecycleWire(t, 7, 14, correctedKind), true)
+	var revision string
+	err := pool.QueryRow(t.Context(), "SELECT revision_id FROM feed_material_state WHERE material_id = $1", bookID).Scan(&revision)
+	if err != nil || revision != correctionID {
+		t.Fatal("latest correction not applied", revision, err)
 	}
 }
 
