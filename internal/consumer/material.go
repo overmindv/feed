@@ -13,6 +13,9 @@ const (
 	sourceMaterial    = "material"
 	materialPublished = "material.published"
 	materialArchived  = "material.archived"
+	materialWithdrawn = "material.withdrawn"
+	materialRestored  = "material.restored"
+	materialCorrected = "material.corrected"
 )
 
 type materialEnvelope struct {
@@ -23,15 +26,19 @@ type materialEnvelope struct {
 	AggregateVersion int64     `json:"aggregate_version"`
 	RevisionID       string    `json:"revision_id"`
 	Payload          struct {
-		Tombstone *bool `json:"tombstone"`
-		Metadata  *struct {
+		Tombstone             *bool  `json:"tombstone"`
+		InvalidatedRevisionID string `json:"invalidated_revision_id"`
+		Metadata              *struct {
 			Title string `json:"title"`
 		} `json:"metadata"`
 	} `json:"payload"`
 }
 
 func decodeMaterial(eventType, key string, value []byte) (*domain.MaterialChange, error) {
-	if eventType != materialPublished && eventType != materialArchived {
+	tombstone := eventType == materialArchived || eventType == materialWithdrawn
+	switch eventType {
+	case materialPublished, materialArchived, materialWithdrawn, materialRestored, materialCorrected:
+	default:
 		return nil, domain.RejectUnknownType
 	}
 
@@ -41,7 +48,13 @@ func decodeMaterial(eventType, key string, value []byte) (*domain.MaterialChange
 	}
 	if e.SchemaVersion != 1 || !validUUID(e.EventID) || !validUUID(e.AggregateID) ||
 		(key != "" && key != e.AggregateID) || e.AggregateVersion < 1 || e.OccurredAt.IsZero() ||
-		e.Payload.Tombstone == nil || *e.Payload.Tombstone != (eventType == materialArchived) {
+		e.Payload.Tombstone == nil || *e.Payload.Tombstone != tombstone {
+		return nil, domain.RejectInvalidMaterial
+	}
+	if eventType == materialCorrected && (!validUUID(e.Payload.InvalidatedRevisionID) || e.Payload.InvalidatedRevisionID == e.RevisionID) {
+		return nil, domain.RejectInvalidMaterial
+	}
+	if eventType == materialWithdrawn && (!validUUID(e.RevisionID) || e.Payload.InvalidatedRevisionID != e.RevisionID || e.Payload.Metadata != nil) {
 		return nil, domain.RejectInvalidMaterial
 	}
 
@@ -51,7 +64,7 @@ func decodeMaterial(eventType, key string, value []byte) (*domain.MaterialChange
 		AggregateVersion: e.AggregateVersion,
 		OccurredAt:       e.OccurredAt,
 	}
-	if eventType == materialArchived {
+	if tombstone {
 		return change, nil
 	}
 	if !validUUID(e.RevisionID) || e.Payload.Metadata == nil {

@@ -60,3 +60,38 @@ func TestMaterialEnvelopeRejectsInvalidAndPrivateActivity(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestMaterialModerationEnvelope(t *testing.T) {
+	t.Parallel()
+
+	const original = "a3300000-0000-4000-8000-000000000003"
+	const previous = "a3300000-0000-4000-8000-000000000004"
+	correction := strings.NewReplacer(materialPublished, materialCorrected, `"metadata":`, `"invalidated_revision_id":"`+previous+`","metadata":`).Replace(materialPayload)
+	withdrawal := strings.NewReplacer(materialPublished, materialWithdrawn, `"tombstone":false,"metadata":{"title":"Графы"}`,
+		`"tombstone":true,"invalidated_revision_id":"`+original+`"`).Replace(materialPayload)
+	restored := strings.Replace(materialPayload, materialPublished, materialRestored, 1)
+
+	for _, tc := range []struct {
+		body     string
+		revision string
+	}{
+		{correction, original},
+		{withdrawal, ""},
+		{restored, original},
+	} {
+		message, err := decodeForSource(sourceMaterial, materialID, []byte(tc.body))
+		if err != nil || message.material == nil || message.material.RevisionID != tc.revision {
+			t.Error("unexpected projection", message.material, err)
+		}
+	}
+	for _, value := range []string{
+		strings.Replace(correction, previous, original, 1),
+		strings.Replace(correction, `"invalidated_revision_id":"`+previous+`",`, "", 1),
+		strings.Replace(withdrawal, `"invalidated_revision_id":"`+original+`"`, `"invalidated_revision_id":"`+previous+`"`, 1),
+		strings.Replace(restored, `"tombstone":false`, `"tombstone":true`, 1),
+	} {
+		if _, err := decodeForSource(sourceMaterial, materialID, []byte(value)); !errors.Is(err, domain.RejectInvalidMaterial) {
+			t.Error("invalid lifecycle change accepted", err)
+		}
+	}
+}
