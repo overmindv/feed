@@ -71,10 +71,19 @@ func nullableUUID(value string) any {
 	return value
 }
 
+const publicFeedFilter = `
+		(f.source <> 'catalog' OR f.catalog_revision IS NOT NULL)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM feed_catalog_visibility AS visibility
+		    WHERE visibility.resource_key = ANY(f.visibility_keys)
+		      AND visibility.fence_revision > 0
+		      AND visibility.fence_revision > f.catalog_revision
+		  )`
+
 // ListItems возвращает записи ленты по убыванию времени события.
 func (r *Postgres) ListItems(ctx context.Context, limit, offset int) ([]domain.FeedItem, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 50
+	if limit <= 0 || limit > domain.MaxPageSize {
+		limit = domain.DefaultPageSize
 	}
 	if offset < 0 {
 		offset = 0
@@ -83,14 +92,7 @@ func (r *Postgres) ListItems(ctx context.Context, limit, offset int) ([]domain.F
 	const projection = `
 		SELECT f.id, source, event_key, kind, COALESCE(actor_user_id::text, '') AS actor_user_id,
 		       aggregate_type, aggregate_id, occurred_at, title, text, href, raw_payload
-		FROM feed_items f
-		WHERE (f.source <> 'catalog' OR f.catalog_revision IS NOT NULL)
-		  AND NOT EXISTS (
-		    SELECT 1 FROM feed_catalog_visibility AS visibility
-		    WHERE visibility.resource_key = ANY(f.visibility_keys)
-		      AND visibility.fence_revision > 0
-		      AND visibility.fence_revision > f.catalog_revision
-		  )`
+		FROM feed_items f WHERE ` + publicFeedFilter
 	const columns = `SELECT id::text, source, event_key, kind, actor_user_id,
 		aggregate_type, aggregate_id, occurred_at, title, text, href, raw_payload FROM (`
 	const window = `) AS items ORDER BY items.occurred_at DESC, items.id DESC LIMIT $1 OFFSET $2`

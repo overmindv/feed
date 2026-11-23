@@ -13,6 +13,7 @@ type Repository interface {
 	ActivityWriter
 	// ListItems возвращает записи ленты по убыванию времени события.
 	ListItems(ctx context.Context, limit, offset int) ([]domain.FeedItem, error)
+	ListPage(ctx context.Context, limit int, after *domain.FeedCursor) (domain.FeedPage, error)
 }
 
 type ActivityWriter interface {
