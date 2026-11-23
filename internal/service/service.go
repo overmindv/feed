@@ -21,3 +21,7 @@ func New(repo repository.Repository) *Service {
 func (s *Service) ListFeed(ctx context.Context, limit, offset int) ([]domain.FeedItem, error) {
 	return s.repo.ListItems(ctx, limit, offset)
 }
+
+func (s *Service) ListPage(ctx context.Context, limit int, after *domain.FeedCursor) (domain.FeedPage, error) {
+	return s.repo.ListPage(ctx, limit, after)
+}

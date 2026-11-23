@@ -23,6 +23,22 @@ type FeedItem struct {
 	RawPayload    json.RawMessage
 }
 
+const (
+	DefaultPageSize = 50
+	MaxPageSize     = 100
+)
+
+type FeedCursor struct {
+	OccurredAt time.Time
+	ID         string
+	Material   bool
+}
+
+type FeedPage struct {
+	Items []FeedItem
+	Next  *FeedCursor
+}
+
 type CatalogChange struct {
 	EventID          string
 	ResourceKey      string

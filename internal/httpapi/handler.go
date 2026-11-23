@@ -6,9 +6,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/overmindv/feed/internal/apperror"
+	"github.com/overmindv/feed/internal/domain"
 	"github.com/overmindv/feed/internal/service"
 )
 
@@ -34,9 +36,10 @@ type item struct {
 
 // listResponse — ответ GET /v1/feed.
 type listResponse struct {
-	Items  []item `json:"items"`
-	Limit  int    `json:"limit"`
-	Offset int    `json:"offset"`
+	Items      []item `json:"items"`
+	Limit      int    `json:"limit"`
+	Offset     int    `json:"offset"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 // Router описывает минимальный контракт HTTP-роутера.
@@ -68,8 +71,19 @@ func (h *Handler) auth(next http.Handler) http.Handler {
 
 // list отдаёт записи ленты по убыванию времени события.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	limit := parseQueryInt(r, "limit", 50)
-	offset := parseQueryInt(r, "offset", 0)
+	query, queryErr := url.ParseQuery(r.URL.RawQuery)
+	if queryErr != nil {
+		badPage(w)
+
+		return
+	}
+	if query.Has(cursorParam) {
+		h.listPage(w, r, query)
+
+		return
+	}
+	limit := parseQueryInt(query, limitParam, domain.DefaultPageSize)
+	offset := parseQueryInt(query, offsetParam, 0)
 
 	items, err := h.service.ListFeed(r.Context(), limit, offset)
 	if err != nil {
@@ -77,7 +91,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+	writeJSON(w, http.StatusOK, listResponse{Items: cards(items), Limit: limit, Offset: offset})
+}
 
+func cards(items []domain.FeedItem) []item {
 	out := make([]item, 0, len(items))
 	for _, it := range items {
 		out = append(out, item{
@@ -90,7 +107,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			OccurredAt:  it.OccurredAt.Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
-	writeJSON(w, http.StatusOK, listResponse{Items: out, Limit: limit, Offset: offset})
+
+	return out
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, err error) {
@@ -105,8 +123,8 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 }
 
 // parseQueryInt читает int из query-параметра с fallback.
-func parseQueryInt(r *http.Request, key string, fallback int) int {
-	value := r.URL.Query().Get(key)
+func parseQueryInt(query url.Values, key string, fallback int) int {
+	value := query.Get(key)
 	if value == "" {
 		return fallback
 	}

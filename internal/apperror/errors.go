@@ -5,6 +5,7 @@ import "fmt"
 const (
 	PermissionDenied = "PERMISSION_DENIED"
 	InternalError    = "INTERNAL_ERROR"
+	ValidationError  = "VALIDATION_ERROR"
 )
 
 // Error — публичная ошибка с машинным кодом и HTTP status.
