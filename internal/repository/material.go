@@ -34,12 +34,13 @@ func (r activityWriter) ApplyMaterialChange(ctx context.Context, change domain.M
 	return nil
 }
 
-const publicMaterialFilter = `
-	revision_id IS NOT NULL AND NOT EXISTS (
+const materialQuarantineHold = `EXISTS (
 		SELECT 1 FROM feed_event_quarantine
 		WHERE source = 'material' AND replayed_at IS NULL
 			AND reason IN ('invalid_json', 'too_large', 'invalid_material')
 	)`
+
+const publicMaterialFilter = `revision_id IS NOT NULL AND NOT ` + materialQuarantineHold
 
 const materialFeedRows = `
 	SELECT id, 'material', material_id::text, 'material.published', '',
