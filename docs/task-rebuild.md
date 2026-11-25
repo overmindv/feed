@@ -22,3 +22,21 @@ watermark. Это не переключает ленту, не меняет Kafk
 сверить порядок, сохранение ID карточек и снятие с публикации со
 снимками остальных источников. ID событий журнала Tasks и старого
 Kafka outbox не взаимозаменяемы.
+
+## Журнал Entities
+
+Для того же запуска задайте `FEED_ENTITIES_URL` с базовым URL Entities и
+выделенный `ENTITIES_FEED_REPLAY_TOKEN`. Условия для HTTPS и `-allow-http`
+те же, что для Tasks.
+
+```sh
+feed prepare-catalog-rebuild -run task-rebuild-01 -pages 20
+```
+
+Команда сохраняет checkpoint и события в `feed_rebuild_catalog_runs` и
+`feed_rebuild_catalog_changes`. Пустая страница может продвинуть checkpoint,
+если Entities отфильтровал изменения пререквизитов. Скрытия, удаления и
+`scope_reset` сохраняются для пересборки; скрытые названия и предки не пишутся.
+При неполной истории команда останавливается. Повторный запуск с тем же ID
+читает оставшиеся страницы с закрепленным watermark. `complete=true`
+относится только к журналу Entities и не переключает ленту.
