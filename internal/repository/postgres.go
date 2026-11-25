@@ -35,12 +35,19 @@ func (r *Postgres) Ping(ctx context.Context) error {
 }
 
 func (r activityWriter) ApplyTaskPublication(ctx context.Context, publication domain.TaskPublication) error {
+	_, err := taskPublicationStatement(publication).exec(ctx, r.db)
+
+	return err
+}
+
+func taskPublicationStatement(publication domain.TaskPublication) activityStatement {
 	item := publication.Item
 	eventKey := item.AggregateID
 	if publication.EventID != "" {
 		eventKey = "event:" + publication.EventID
 	}
-	_, err := r.db.Exec(ctx, `
+
+	return activityStatement{name: "apply task publication", query: `
 		WITH received AS (
 			INSERT INTO feed_event_inbox (source,event_id)
 			SELECT 'task', $1::uuid WHERE $1::uuid IS NOT NULL
@@ -52,14 +59,10 @@ func (r activityWriter) ApplyTaskPublication(ctx context.Context, publication do
 			 occurred_at, title, text, href, raw_payload)
 		SELECT 'task', $2, 'task.published', NULL, 'task', $3, $4, $5, '', $6, $7::jsonb
 		WHERE $1::uuid IS NULL OR EXISTS (SELECT 1 FROM received)
-		ON CONFLICT (source, event_key, kind) DO NOTHING`,
-		nullableUUID(publication.EventID), eventKey, item.AggregateID, item.OccurredAt,
-		item.Title, item.Href, item.RawPayload)
-	if err != nil {
-		return fmt.Errorf("apply task publication: %w", err)
+		ON CONFLICT (source, event_key, kind) DO NOTHING`, args: []any{
+		nullableUUID(publication.EventID), eventKey, item.AggregateID, item.OccurredAt, item.Title, item.Href, item.RawPayload,
+	},
 	}
-
-	return nil
 }
 
 // nullableUUID сохраняет отсутствие необязательного UUID.

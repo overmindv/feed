@@ -17,7 +17,7 @@ func TestInboxSeparatesPublicationFromDelivery(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
 	store := repository.New(pool, false)
-	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), catalogTopic, taskTopic, "")
+	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), catalogTopic, taskTopic, "", activityTestGroup)
 	taskPosition := domain.EventPosition{Topic: taskTopic}
 	const taskID = "ded10000-0000-0000-0000-000000000001"
 	const firstID = "ded10000-0000-0000-0000-000000000002"
@@ -161,7 +161,7 @@ func TestInboxMigrationKeepsOldPublicationIdentity(t *testing.T) {
 	migrate("../../migrations")
 
 	store := repository.New(pool, false)
-	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), catalogTopic, taskTopic, "")
+	handle := consumer.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), catalogTopic, taskTopic, "", activityTestGroup)
 	value, err := json.Marshal(map[string]any{
 		"event_type":  "task.published",
 		"task_id":     taskID,

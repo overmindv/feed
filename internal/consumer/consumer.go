@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"log/slog"
 
@@ -10,13 +11,12 @@ import (
 )
 
 type activityStore interface {
-	repository.ActivityWriter
-	SaveRejection(context.Context, domain.EventRejection) (bool, error)
+	RecordKafkaActivity(context.Context, domain.KafkaActivity) (bool, error)
 }
 
 type Handler func(context.Context, domain.EventPosition, string, []byte) error
 
-func NewHandler(store activityStore, log *slog.Logger, catalogTopic, taskTopic, materialTopic string) Handler {
+func NewHandler(store activityStore, log *slog.Logger, catalogTopic, taskTopic, materialTopic, group string) Handler {
 	return func(ctx context.Context, position domain.EventPosition, key string, value []byte) error {
 		var source string
 		switch position.Topic {
@@ -33,26 +33,31 @@ func NewHandler(store activityStore, log *slog.Logger, catalogTopic, taskTopic, 
 			return errors.New("unexpected kafka topic")
 		}
 
-		return handleActivity(ctx, store, log, position, source, key, value)
+		return handleActivity(ctx, store, log, position, source, key, value, group)
 	}
 }
 
 func handleActivity(
 	ctx context.Context, store activityStore, log *slog.Logger,
-	position domain.EventPosition, source, key string, value []byte,
+	position domain.EventPosition, source, key string, value []byte, group string,
 ) error {
 	message, err := decodeForSource(source, key, value)
+	delivery := domain.KafkaActivity{Group: group, Position: position, Fingerprint: activityFingerprint(key, value)}
 	if err == nil {
-		return message.apply(ctx, store)
+		delivery.Catalog, delivery.Task, delivery.Material = message.catalog, message.task, message.material
+		_, err = store.RecordKafkaActivity(ctx, delivery)
+
+		return err
 	}
 	var reason domain.RejectionReason
 	if !errors.As(err, &reason) {
 		return err
 	}
-	fresh, err := store.SaveRejection(ctx, domain.EventRejection{
+	delivery.Rejection = &domain.EventRejection{
 		Position: position, Source: source, Reason: reason, PayloadSize: len(value),
 		Identity: rejectionIdentity(source, key, value),
-	})
+	}
+	fresh, err := store.RecordKafkaActivity(ctx, delivery)
 	if err != nil {
 		return err
 	}
@@ -62,6 +67,16 @@ func handleActivity(
 	}
 
 	return nil
+}
+
+func activityFingerprint(key string, value []byte) [sha256.Size]byte {
+	keyHash := sha256.Sum256([]byte(key))
+	valueHash := sha256.Sum256(value)
+	var hashes [2 * sha256.Size]byte
+	copy(hashes[:sha256.Size], keyHash[:])
+	copy(hashes[sha256.Size:], valueHash[:])
+
+	return sha256.Sum256(hashes[:])
 }
 
 func decodeForSource(source, key string, value []byte) (event, error) {

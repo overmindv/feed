@@ -35,7 +35,7 @@ func Build(app *parker.App) error {
 		}
 	}
 
-	handle := consumer.NewHandler(store, app.Logger(), cfg.CatalogActivityTopic, cfg.TaskActivityTopic, cfg.MaterialActivityTopic)
+	handle := consumer.NewHandler(store, app.Logger(), cfg.CatalogActivityTopic, cfg.TaskActivityTopic, cfg.MaterialActivityTopic, cfg.ConsumerGroup)
 	subscriber, err := app.NewSubscriber(cfg.ConsumerGroup,
 		cfg.ActivityTopics(),
 		func(ctx context.Context, key string, value []byte) error {

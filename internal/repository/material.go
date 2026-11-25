@@ -2,13 +2,18 @@ package repository
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/overmindv/feed/internal/domain"
 )
 
 func (r activityWriter) ApplyMaterialChange(ctx context.Context, change domain.MaterialChange) error {
-	_, err := r.db.Exec(ctx, `
+	_, err := materialChangeStatement(change).exec(ctx, r.db)
+
+	return err
+}
+
+func materialChangeStatement(change domain.MaterialChange) activityStatement {
+	return activityStatement{name: "apply material change", query: `
 		WITH received AS (
 			INSERT INTO feed_event_inbox (source, event_id)
 			VALUES ('material', $2::uuid)
@@ -24,14 +29,10 @@ func (r activityWriter) ApplyMaterialChange(ctx context.Context, change domain.M
 			occurred_at = EXCLUDED.occurred_at
 		WHERE current.aggregate_version < EXCLUDED.aggregate_version
 			OR (current.aggregate_version = EXCLUDED.aggregate_version
-				AND current.revision_id IS NOT NULL AND EXCLUDED.revision_id IS NULL)`,
-		change.MaterialID, change.EventID, change.AggregateVersion,
-		nullableUUID(change.RevisionID), change.Title, change.OccurredAt)
-	if err != nil {
-		return fmt.Errorf("apply material change: %w", err)
+				AND current.revision_id IS NOT NULL AND EXCLUDED.revision_id IS NULL)`, args: []any{
+		change.MaterialID, change.EventID, change.AggregateVersion, nullableUUID(change.RevisionID), change.Title, change.OccurredAt,
+	},
 	}
-
-	return nil
 }
 
 const materialQuarantineHold = `EXISTS (
