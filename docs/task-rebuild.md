@@ -40,3 +40,26 @@ feed prepare-catalog-rebuild -run task-rebuild-01 -pages 20
 При неполной истории команда останавливается. Повторный запуск с тем же ID
 читает оставшиеся страницы с закрепленным watermark. `complete=true`
 относится только к журналу Entities и не переключает ленту.
+
+## Снимок Content
+
+В окружении Feed задайте `FEED_CONTENT_GRPC_ADDRESS` (хост и порт),
+`CONTENT_GRPC_CATALOG_TOKEN`, настройки Kafka и `KAFKA_CONTENT_MATERIAL_TOPIC`.
+Для частного CA укажите `FEED_CONTENT_GRPC_CA_FILE`. Флаг `-allow-insecure`
+отключает TLS только для изолированной сети с `ENV=local` или `ENV=test`.
+
+```sh
+feed prepare-material-rebuild -run task-rebuild-01 -pages 20
+```
+
+Для нового запуска команда сохраняет ID топика и последние стабильные
+offsets всех разделов до запроса снимка. Kafka consumer group не меняется.
+Повторный запуск продолжает с той же позиции и watermark. Страница и курсор
+пишутся вместе в `feed_rebuild_material_rows` и `feed_rebuild_material_runs`.
+
+`snapshot_complete=true` означает, что снимок прочитан до конца.
+`unresolved` считает видимые записи без исходного времени. Такие записи
+сохраняются без даты; подставлять текущее время нельзя. Если Content
+восстановил даты после импорта или записанные offsets уже недоступны,
+нужен новый запуск. Снимок не переключает ленту: сначала нужно дочитать
+события Content после сохраненной позиции и сравнить проекции.
