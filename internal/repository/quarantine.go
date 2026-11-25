@@ -15,22 +15,29 @@ var (
 )
 
 func (r *Postgres) SaveRejection(ctx context.Context, rejection domain.EventRejection) (bool, error) {
+	tag, err := rejectionStatement(rejection).exec(ctx, r.pool)
+	if err != nil {
+		return false, err
+	}
+
+	return tag.RowsAffected() == 1, nil
+}
+
+func rejectionStatement(rejection domain.EventRejection) activityStatement {
 	p := rejection.Position
 	var kind any
 	var hash []byte
 	if rejection.Identity.Kind != "" {
 		kind, hash = rejection.Identity.Kind, rejection.Identity.Hash[:]
 	}
-	tag, err := r.pool.Exec(ctx, `
+
+	return activityStatement{name: "save rejection", query: `
 		INSERT INTO feed_event_quarantine (topic, partition, record_offset, source, reason, payload_size, identity_kind, identity_hash)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		ON CONFLICT (topic, partition, record_offset) DO NOTHING`,
-		p.Topic, p.Partition, p.Offset, rejection.Source, rejection.Reason, rejection.PayloadSize, kind, hash)
-	if err != nil {
-		return false, fmt.Errorf("save rejection: %w", err)
+		ON CONFLICT (topic, partition, record_offset) DO NOTHING`, args: []any{
+		p.Topic, p.Partition, p.Offset, rejection.Source, rejection.Reason, rejection.PayloadSize, kind, hash,
+	},
 	}
-
-	return tag.RowsAffected() == 1, nil
 }
 
 func (r *Postgres) OldestRejectionAge(ctx context.Context) (float64, error) {

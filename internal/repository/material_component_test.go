@@ -82,7 +82,7 @@ func TestMaterialFeedLifecycle(t *testing.T) {
 	pool := feedTestPool(t)
 	store := repository.New(pool, true)
 	log := slog.New(slog.DiscardHandler)
-	handle := consumer.NewHandler(store, log, catalogTopic, taskTopic, materialTopic)
+	handle := consumer.NewHandler(store, log, catalogTopic, taskTopic, materialTopic, activityTestGroup)
 	api := http.NewServeMux()
 	gatewayToken := strings.Repeat("f", 32)
 	httpapi.Register(api, service.New(store), gatewayToken, log)
@@ -159,7 +159,7 @@ func TestMaterialFeedLifecycle(t *testing.T) {
 func TestMaterialModerationReplay(t *testing.T) {
 	pool := feedTestPool(t)
 	store := repository.New(pool, true)
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, materialTopic)
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, materialTopic, activityTestGroup)
 	check := func(offset int64, body []byte, visible bool) {
 		t.Helper()
 		if err := handle(t.Context(), domain.EventPosition{Topic: materialTopic, Offset: offset}, bookID, body); err != nil {
@@ -191,7 +191,7 @@ func TestMaterialModerationReplay(t *testing.T) {
 func TestMaterialReplayAndConcurrentArchive(t *testing.T) {
 	pool := feedTestPool(t)
 	store := repository.New(pool, true)
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, materialTopic)
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, materialTopic, activityTestGroup)
 	valid := materialWire(t, 6, 10, false)
 	invalid := []byte(strings.Replace(string(valid), revisionID, "invalid-revision", 1))
 	p := domain.EventPosition{Topic: materialTopic, Offset: 1}

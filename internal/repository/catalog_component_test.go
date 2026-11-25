@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	catalogTopic = "catalog.activity.v1"
-	taskTopic    = "task.activity.v1"
+	catalogTopic      = "catalog.activity.v1"
+	taskTopic         = "task.activity.v1"
+	activityTestGroup = "feed-fixture-v1"
 )
 
 func feedTestPool(t testing.TB) *pgxpool.Pool {
@@ -113,7 +114,7 @@ func TestFeedDoesNotUnhideOldCatalogCards(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	handle := consumer.NewHandler(store, log, catalogTopic, taskTopic, "")
+	handle := consumer.NewHandler(store, log, catalogTopic, taskTopic, "", activityTestGroup)
 	token := strings.Repeat("t", 32)
 	api := http.NewServeMux()
 	httpapi.Register(api, service.New(store), token, log)

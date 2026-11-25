@@ -19,28 +19,21 @@ type activityFixture struct {
 	applied    int
 }
 
-func (f *activityFixture) ApplyMaterialChange(context.Context, domain.MaterialChange) error {
-	f.applied++
+const testActivityGroup = "feed-fixture-v1"
 
-	return f.applyErr
-}
+func (f *activityFixture) RecordKafkaActivity(_ context.Context, delivery domain.KafkaActivity) (bool, error) {
+	if delivery.Rejection != nil {
+		f.rejections = append(f.rejections, *delivery.Rejection)
 
-func (f *activityFixture) ApplyCatalogChange(context.Context, domain.CatalogChange) error {
-	f.applied++
+		return f.saveErr == nil, f.saveErr
+	}
+	if delivery.Catalog != nil || delivery.Task != nil || delivery.Material != nil {
+		f.applied++
 
-	return f.applyErr
-}
+		return false, f.applyErr
+	}
 
-func (f *activityFixture) ApplyTaskPublication(context.Context, domain.TaskPublication) error {
-	f.applied++
-
-	return f.applyErr
-}
-
-func (f *activityFixture) SaveRejection(_ context.Context, rejected domain.EventRejection) (bool, error) {
-	f.rejections = append(f.rejections, rejected)
-
-	return f.saveErr == nil, f.saveErr
+	return false, nil
 }
 
 func TestQuarantineLogsOnlyMetadata(t *testing.T) {
@@ -48,7 +41,7 @@ func TestQuarantineLogsOnlyMetadata(t *testing.T) {
 
 	store := &activityFixture{}
 	var logs bytes.Buffer
-	handle := NewHandler(store, slog.New(slog.NewJSONHandler(&logs, nil)), "catalog", "tasks", "")
+	handle := NewHandler(store, slog.New(slog.NewJSONHandler(&logs, nil)), "catalog", "tasks", "", testActivityGroup)
 	position := domain.EventPosition{Topic: "tasks", Partition: 2, Offset: 19}
 	const payload = `{"event_type":"task.published","occurred_at":"fixture-sensitive-detail"}`
 	if err := handle(t.Context(), position, "fixture-sensitive-key", []byte(payload)); err != nil {
@@ -67,7 +60,7 @@ func TestQuarantineLogsOnlyMetadata(t *testing.T) {
 //nolint:paralleltest // subtests intentionally share one in-memory rejection fixture
 func TestClassifyActivityRefusals(t *testing.T) {
 	store := &activityFixture{}
-	handle := NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), "catalog", "tasks", "")
+	handle := NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), "catalog", "tasks", "", testActivityGroup)
 	cases := []struct {
 		topic, data string
 		want        domain.RejectionReason
@@ -104,7 +97,7 @@ func TestActivityStorageErrorsPropagate(t *testing.T) {
 
 	databaseErr := errors.New("database offline")
 	store := &activityFixture{saveErr: databaseErr, applyErr: databaseErr}
-	handle := NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), "catalog", "tasks", "")
+	handle := NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), "catalog", "tasks", "", testActivityGroup)
 	for _, value := range []string{"{", `{"event_type":"task.published","task_id":"11111111-1111-1111-1111-111111111111","occurred_at":"2026-09-12T10:00:00Z"}`} {
 		if err := handle(t.Context(), domain.EventPosition{Topic: "tasks"}, "", []byte(value)); !errors.Is(err, databaseErr) {
 			t.Fatal(err)

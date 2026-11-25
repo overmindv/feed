@@ -2,12 +2,17 @@ package repository
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/overmindv/feed/internal/domain"
 )
 
 func (r activityWriter) ApplyCatalogChange(ctx context.Context, change domain.CatalogChange) error {
+	_, err := catalogChangeStatement(change).exec(ctx, r.db)
+
+	return err
+}
+
+func catalogChangeStatement(change domain.CatalogChange) activityStatement {
 	visible := change.Item != nil
 	var fence int64
 	if !visible || change.ScopeReset {
@@ -23,7 +28,7 @@ func (r activityWriter) ApplyCatalogChange(ctx context.Context, change domain.Ca
 	}
 
 	// Старая блокировка не меняет текущий статус, но скрывает карточки, выпущенные до нее.
-	_, err := r.db.Exec(ctx, `
+	return activityStatement{name: "apply catalog visibility", query: `
 		WITH received AS (
 			INSERT INTO feed_event_inbox (source,event_id)
 			SELECT 'catalog', $15::uuid WHERE $15::uuid IS NOT NULL
@@ -55,12 +60,10 @@ func (r activityWriter) ApplyCatalogChange(ctx context.Context, change domain.Ca
 			actor_user_id=EXCLUDED.actor_user_id, occurred_at=EXCLUDED.occurred_at,
 			title=EXCLUDED.title, text=EXCLUDED.text, href=EXCLUDED.href,
 			raw_payload=EXCLUDED.raw_payload, catalog_revision=EXCLUDED.catalog_revision,
-			visibility_keys=EXCLUDED.visibility_keys`, change.ResourceKey, change.CatalogRevision,
-		change.AggregateVersion, visible, fence, item.Kind, nullableUUID(item.ActorUserID),
-		item.AggregateType, item.AggregateID, item.OccurredAt, item.Title, item.Text, item.Href, keys, nullableUUID(change.EventID))
-	if err != nil {
-		return fmt.Errorf("apply catalog visibility: %w", err)
+			visibility_keys=EXCLUDED.visibility_keys`, args: []any{
+		change.ResourceKey, change.CatalogRevision, change.AggregateVersion, visible, fence, item.Kind,
+		nullableUUID(item.ActorUserID), item.AggregateType, item.AggregateID, item.OccurredAt, item.Title,
+		item.Text, item.Href, keys, nullableUUID(change.EventID),
+	},
 	}
-
-	return nil
 }

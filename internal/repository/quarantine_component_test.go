@@ -20,7 +20,7 @@ func TestQuarantineRetryAndDuplicate(t *testing.T) {
 	ctx := t.Context()
 	pool := feedTestPool(t)
 	store := repository.New(pool, false)
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "")
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "", activityTestGroup)
 	p := domain.EventPosition{Topic: taskTopic, Partition: 1, Offset: 123}
 	value := []byte(`{"event_type":"task.published","occurred_at":"bad time"}`)
 	execQuarantineFixture(t, pool, "ALTER TABLE feed_event_quarantine ADD CONSTRAINT fixture_block_offset CHECK (record_offset < 100) NOT VALID")
@@ -52,7 +52,7 @@ func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 	pool := feedTestPool(t)
 	store := repository.New(pool, false)
 	p := domain.EventPosition{Topic: taskTopic, Partition: 1, Offset: 42}
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "")
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "", activityTestGroup)
 	invalid := strings.Replace(correctedTask, "2026-09-12T10:00:00Z", "bad timestamp", 1)
 	if err := handle(ctx, p, "", []byte(invalid)); err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestQuarantineReplayIsValidatedAndAtomic(t *testing.T) {
 func TestQuarantineUnverifiedReplayRequiresConfirmation(t *testing.T) {
 	ctx := t.Context()
 	store := repository.New(feedTestPool(t), false)
-	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "")
+	handle := consumer.NewHandler(store, slog.New(slog.DiscardHandler), catalogTopic, taskTopic, "", activityTestGroup)
 	p := domain.EventPosition{Topic: taskTopic, Offset: 51}
 	if err := handle(ctx, p, "", []byte("{")); err != nil {
 		t.Fatal(err)
