@@ -50,12 +50,11 @@ func runPrepareMaterial(args []string, output io.Writer) error {
 		return err
 	}
 	defer func() { _ = snapshot.Close() }()
-	kafkaOptions, err := parker.KafkaClientOptions(opts.KafkaSecurity)
+	kafkaOptions, err := materialKafkaOptions(opts)
 	if err != nil {
-		return errors.New("invalid rebuild Kafka security configuration")
+		return err
 	}
-	kafka, err := kgo.NewClient(append(kafkaOptions,
-		kgo.SeedBrokers(opts.KafkaBrokers...), kgo.BrokerMaxReadBytes(4<<20))...)
+	kafka, err := kgo.NewClient(kafkaOptions...)
 	if err != nil {
 		return errors.New("cannot open rebuild Kafka client")
 	}
@@ -88,4 +87,13 @@ func runPrepareMaterial(args []string, output io.Writer) error {
 		*id, *checkpoint.Watermark, checkpoint.Complete, checkpoint.Unresolved)
 
 	return err
+}
+
+func materialKafkaOptions(opts parker.Options) ([]kgo.Opt, error) {
+	kafkaOptions, err := parker.KafkaClientOptions(opts.KafkaSecurity)
+	if err != nil {
+		return nil, errors.New("invalid rebuild Kafka security configuration")
+	}
+
+	return append(kafkaOptions, kgo.SeedBrokers(opts.KafkaBrokers...), kgo.BrokerMaxReadBytes(4<<20)), nil
 }
