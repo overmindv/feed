@@ -34,6 +34,18 @@ type materialEnvelope struct {
 	} `json:"payload"`
 }
 
+func DecodeMaterialRecord(key string, value []byte) (domain.MaterialChange, error) {
+	message, err := decodeForSource(sourceMaterial, key, value)
+	if err != nil {
+		return domain.MaterialChange{}, err
+	}
+	if message.material == nil {
+		return domain.MaterialChange{}, domain.RejectInvalidMaterial
+	}
+
+	return *message.material, nil
+}
+
 func decodeMaterial(eventType, key string, value []byte) (*domain.MaterialChange, error) {
 	tombstone := eventType == materialArchived || eventType == materialWithdrawn
 	switch eventType {

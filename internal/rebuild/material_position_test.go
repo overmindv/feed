@@ -123,4 +123,45 @@ func TestMaterialPositionWithKafka(t *testing.T) {
 		position.Partitions[1].NextOffset != 0 || position.Partitions[2].NextOffset != 1 {
 		t.Error("did not capture every Kafka partition", position, err)
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkKafkaReplay(t, ctx, client, broker, positioner, position)
+}
+
+func checkKafkaReplay(t *testing.T, ctx context.Context, client *kgo.Client, broker string,
+	positioner *KafkaMaterialPositioner, position MaterialPosition) {
+	t.Helper()
+	publish := func(partition int32, value string) {
+		t.Helper()
+		if err := client.ProduceSync(ctx, &kgo.Record{Topic: position.Topic, Partition: partition, Value: []byte(value)}).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish(0, "1")
+	publish(2, "2")
+	source := NewKafkaMaterialReplay(positioner, []kgo.Opt{kgo.SeedBrokers(broker)}, fixtureReplayDecoder)
+	defer source.Close()
+	state := MaterialReplayState{Watermark: 1, Position: position}
+	target, err := source.ValidateRange(ctx, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Target = target
+	publish(2, "3")
+	var events []MaterialReplayEvent
+	for range 3 {
+		if state.CaughtUp() {
+			break
+		}
+		batch, readErr := source.ReadBatch(ctx, state)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		state.Position = batch.Position
+		events = append(events, batch.Events...)
+	}
+	if !state.CaughtUp() || len(events) != 1 || events[0].Partition != 2 || events[0].Offset != 1 || events[0].Version != 2 {
+		t.Error("did not replay the fixed Kafka range", state, events)
+	}
 }

@@ -13,7 +13,11 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-const maxMaterialPartitions = 1024
+const (
+	maxMaterialPartitions = 1024
+	latestMaterialOffset  = -1
+	firstMaterialOffset   = -2
+)
 
 var materialTopicName = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,248}$")
 
@@ -50,35 +54,39 @@ func NewKafkaMaterialPositioner(client *kgo.Client, topic string) (*KafkaMateria
 }
 
 func (p *KafkaMaterialPositioner) CaptureMaterialPosition(ctx context.Context) (MaterialPosition, error) {
+	position, _, err := p.inspectLog(ctx, false)
+
+	return position, err
+}
+
+func (p *KafkaMaterialPositioner) inspectLog(ctx context.Context, includeStart bool) (MaterialPosition, map[int32]int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	id, partitions, err := p.topology(ctx)
 	if err != nil {
-		return MaterialPosition{}, err
+		return MaterialPosition{}, nil, err
 	}
-	query := kmsg.NewPtrListOffsetsRequest()
-	query.IsolationLevel = 1 // Use the last stable offset so pending transactions are not skipped.
-	topic := kmsg.ListOffsetsRequestTopic{Topic: p.topic, Partitions: make([]kmsg.ListOffsetsRequestTopicPartition, len(partitions))}
-	for i, partition := range partitions {
-		topic.Partitions[i] = kmsg.ListOffsetsRequestTopicPartition{
-			Partition: partition.Partition, CurrentLeaderEpoch: partition.LeaderEpoch, Timestamp: -1,
-		}
-	}
-	query.Topics = []kmsg.ListOffsetsRequestTopic{topic}
-	offsets, err := p.readOffsets(ctx, query, partitions)
+	offsets, err := p.readOffsets(ctx, partitions, latestMaterialOffset)
 	if err != nil {
-		return MaterialPosition{}, err
+		return MaterialPosition{}, nil, err
+	}
+	var start map[int32]int64
+	if includeStart {
+		start, err = p.readOffsets(ctx, partitions, firstMaterialOffset)
+		if err != nil {
+			return MaterialPosition{}, nil, err
+		}
 	}
 	lastID, lastPartitions, err := p.topology(ctx)
 	if err != nil || id != lastID || !slices.Equal(partitions, lastPartitions) {
-		return MaterialPosition{}, ErrMaterialPosition
+		return MaterialPosition{}, nil, ErrMaterialPosition
 	}
 	for i := range partitions {
 		partitions[i].NextOffset = offsets[partitions[i].Partition]
 	}
 
-	return MaterialPosition{Topic: p.topic, TopicID: hex.EncodeToString(id[:]), Partitions: partitions}, nil
+	return MaterialPosition{Topic: p.topic, TopicID: hex.EncodeToString(id[:]), Partitions: partitions}, start, nil
 }
 
 func (p *KafkaMaterialPositioner) topology(ctx context.Context) ([16]byte, []MaterialPartition, error) {
@@ -112,12 +120,18 @@ func (p *KafkaMaterialPositioner) topology(ctx context.Context) ([16]byte, []Mat
 	return topic.TopicID, partitions, nil
 }
 
-func (p *KafkaMaterialPositioner) readOffsets(ctx context.Context, query *kmsg.ListOffsetsRequest,
-	partitions []MaterialPartition) (map[int32]int64, error) {
+func (p *KafkaMaterialPositioner) readOffsets(ctx context.Context, partitions []MaterialPartition, timestamp int64) (map[int32]int64, error) {
+	query := kmsg.NewPtrListOffsetsRequest()
+	query.IsolationLevel = 1 // Use the last stable offset so pending transactions are not skipped.
+	topic := kmsg.ListOffsetsRequestTopic{Topic: p.topic, Partitions: make([]kmsg.ListOffsetsRequestTopicPartition, len(partitions))}
 	epochs := make(map[int32]int32, len(partitions))
-	for _, partition := range partitions {
+	for i, partition := range partitions {
 		epochs[partition.Partition] = partition.LeaderEpoch
+		topic.Partitions[i] = kmsg.ListOffsetsRequestTopicPartition{
+			Partition: partition.Partition, CurrentLeaderEpoch: partition.LeaderEpoch, Timestamp: timestamp,
+		}
 	}
+	query.Topics = []kmsg.ListOffsetsRequestTopic{topic}
 	offsets := make(map[int32]int64, len(partitions))
 	for _, shard := range p.client.RequestSharded(ctx, query) {
 		reply, ok := shard.Resp.(*kmsg.ListOffsetsResponse)
@@ -126,7 +140,8 @@ func (p *KafkaMaterialPositioner) readOffsets(ctx context.Context, query *kmsg.L
 		}
 		for _, partition := range reply.Topics[0].Partitions {
 			epoch, expected := epochs[partition.Partition]
-			if partition.ErrorCode != 0 || partition.Offset < 0 || !expected || epoch != partition.LeaderEpoch {
+			if partition.ErrorCode != 0 || partition.Offset < 0 || !expected ||
+				(timestamp == latestMaterialOffset && epoch != partition.LeaderEpoch) {
 				return nil, ErrMaterialPosition
 			}
 			if _, duplicate := offsets[partition.Partition]; duplicate {
