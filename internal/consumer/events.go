@@ -62,24 +62,6 @@ const (
 	taskUnpublished     = "task.unpublished"
 )
 
-// aggregatorName — человекочитаемое имя aggregate для заголовков.
-func aggregatorName(aggregateType string) string {
-	switch aggregateType {
-	case aggregateUniversity:
-		return "университет"
-	case aggregateProgram:
-		return "программа"
-	case aggregateCourse:
-		return "курс"
-	case aggregateTopic:
-		return "тема"
-	case sourceTask:
-		return "задача"
-	default:
-		return aggregateType
-	}
-}
-
 // envelopeMeta — общее поле для дискриминации источника события.
 // Продюсеры кодируют источник в имени event_type (catalog.* / task.*), поэтому
 // источник определяется по нему, а не угадыванием по полям конверта.
@@ -197,26 +179,21 @@ func decodeCatalog(key string, value []byte) (*domain.CatalogChange, error) {
 	}
 
 	aggregate := e.AggregateType
-	kind := aggregate + ".created"
-	mask := "Новый %s: %s"
-	if action == actionUpdated {
-		kind = aggregate + ".activated"
-		mask = "Активирован %s: %s"
-	}
+	presentation := domain.CatalogPresentation(aggregate, action == actionUpdated)
 
 	change.ScopeReset = e.Visibility.ScopeReset
 	change.Ancestors = e.Visibility.Ancestors
 	change.Item = &domain.FeedItem{
 		Source:        sourceCatalog,
 		EventKey:      change.ResourceKey,
-		Kind:          kind,
+		Kind:          presentation.Kind,
 		ActorUserID:   e.ActorUserID,
 		AggregateType: aggregate,
 		AggregateID:   e.AggregateID,
 		OccurredAt:    e.OccurredAt,
-		Title:         fmt.Sprintf(mask, aggregatorName(aggregate), name),
+		Title:         presentation.TitlePrefix + name,
 		Text:          strings.TrimSpace(name),
-		Href:          "/" + aggregate + "s/" + e.AggregateID,
+		Href:          presentation.HrefPrefix + e.AggregateID,
 	}
 
 	return change, nil

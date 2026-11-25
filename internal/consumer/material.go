@@ -87,7 +87,7 @@ func decodeMaterial(eventType, key string, value []byte) (*domain.MaterialChange
 		return nil, domain.RejectInvalidMaterial
 	}
 	change.RevisionID = e.RevisionID
-	change.Title = "Опубликован материал: " + title
+	change.Title = domain.MaterialCardTitlePrefix + title
 
 	return change, nil
 }
