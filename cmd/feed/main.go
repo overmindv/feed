@@ -12,8 +12,8 @@ import (
 // миграции, логирование, метрики, graceful shutdown) — внутри parker, здесь
 // только бизнес-логика (см. run).
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "prepare-task-rebuild" {
-		if err := runPrepareTasks(os.Args[2:], os.Stdout); err != nil {
+	if len(os.Args) > 1 && (os.Args[1] == prepareTaskCommand || os.Args[1] == prepareCatalogCommand) {
+		if err := runPrepareJournal(os.Args[1], os.Args[2:], os.Stdout); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
