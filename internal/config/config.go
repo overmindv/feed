@@ -35,19 +35,32 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("FEED_MATERIAL_CARDS_ENABLED must be a boolean")
 	}
-	cfg := Config{
-		GatewayToken:          strings.TrimSpace(os.Getenv("FEED_GATEWAY_TOKEN")),
-		CatalogActivityTopic:  env("KAFKA_CATALOG_ACTIVITY_TOPIC", defaultCatalogActivityTopic),
-		TaskActivityTopic:     env("KAFKA_TASK_ACTIVITY_TOPIC", defaultTaskActivityTopic),
-		MaterialActivityTopic: strings.TrimSpace(os.Getenv(materialTopicEnv)),
-		MaterialCardsEnabled:  showMaterials,
-		ConsumerGroup:         env("FEED_CONSUMER_GROUP", defaultConsumerGroup),
-	}
+	cfg := activityTopics()
+	cfg.GatewayToken = strings.TrimSpace(os.Getenv("FEED_GATEWAY_TOKEN"))
+	cfg.MaterialCardsEnabled = showMaterials
+	cfg.ConsumerGroup = env("FEED_CONSUMER_GROUP", defaultConsumerGroup)
 	if validateErr := cfg.Validate(); validateErr != nil {
 		return Config{}, fmt.Errorf("validate config: %w", validateErr)
 	}
 
 	return cfg, nil
+}
+
+func activityTopics() Config {
+	return Config{
+		CatalogActivityTopic:  env("KAFKA_CATALOG_ACTIVITY_TOPIC", defaultCatalogActivityTopic),
+		TaskActivityTopic:     env("KAFKA_TASK_ACTIVITY_TOPIC", defaultTaskActivityTopic),
+		MaterialActivityTopic: strings.TrimSpace(os.Getenv(materialTopicEnv)),
+	}
+}
+
+func MaterialRebuildTopic() (string, error) {
+	cfg := activityTopics()
+	if cfg.MaterialActivityTopic == "" {
+		return "", errors.New("KAFKA_CONTENT_MATERIAL_TOPIC is required for the Content snapshot")
+	}
+
+	return cfg.MaterialActivityTopic, cfg.validateMaterialTopic()
 }
 
 // Validate проверяет обязательные и ограниченные настройки сервиса.
@@ -61,14 +74,8 @@ func (c Config) Validate() error {
 	if c.CatalogActivityTopic == c.TaskActivityTopic {
 		return errors.New("catalog и task activity topics должны различаться")
 	}
-	if c.MaterialActivityTopic != "" {
-		switch c.MaterialActivityTopic {
-		case c.CatalogActivityTopic, c.TaskActivityTopic,
-			defaultContentLearningTopic, defaultContentReviewTopic,
-			env("KAFKA_CONTENT_LEARNING_TOPIC", defaultContentLearningTopic),
-			env("KAFKA_CONTENT_CONTRIBUTION_TOPIC", defaultContentReviewTopic):
-			return errors.New("material activity topic must be distinct from other activity topics")
-		}
+	if err := c.validateMaterialTopic(); err != nil {
+		return err
 	}
 	if c.MaterialCardsEnabled && c.MaterialActivityTopic == "" {
 		return errors.New("material cards require a material activity topic")
@@ -78,6 +85,21 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+func (c Config) validateMaterialTopic() error {
+	if c.MaterialActivityTopic == "" {
+		return nil
+	}
+	switch c.MaterialActivityTopic {
+	case c.CatalogActivityTopic, c.TaskActivityTopic,
+		defaultContentLearningTopic, defaultContentReviewTopic,
+		env("KAFKA_CONTENT_LEARNING_TOPIC", defaultContentLearningTopic),
+		env("KAFKA_CONTENT_CONTRIBUTION_TOPIC", defaultContentReviewTopic):
+		return errors.New("material activity topic must be distinct from other activity topics")
+	default:
+		return nil
+	}
 }
 
 func (c Config) ActivityTopics() []string {

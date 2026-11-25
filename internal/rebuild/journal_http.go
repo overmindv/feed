@@ -32,7 +32,7 @@ func newJournalHTTP(address, token, path, urlEnv, tokenEnv string, allowHTTP boo
 		(endpoint.Scheme != "https" && (!allowHTTP || endpoint.Scheme != "http")) {
 		return nil, fmt.Errorf("%s must be a base URL without credentials, query or path", urlEnv)
 	}
-	if len(token) < 32 || len(token) > 512 || strings.ContainsFunc(token, func(r rune) bool { return r < 0x21 || r > 0x7e }) {
+	if !validJournalToken(token) {
 		return nil, fmt.Errorf("%s must contain 32-512 printable ASCII characters without spaces", tokenEnv)
 	}
 	endpoint.Path = path
@@ -45,6 +45,11 @@ func newJournalHTTP(address, token, path, urlEnv, tokenEnv string, allowHTTP boo
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil
+}
+
+func validJournalToken(token string) bool {
+	return len(token) >= 32 && len(token) <= 512 &&
+		!strings.ContainsFunc(token, func(r rune) bool { return r < 0x21 || r > 0x7e })
 }
 
 func (j *journalHTTP) CloseIdleConnections() {

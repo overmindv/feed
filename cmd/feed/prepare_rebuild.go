@@ -30,7 +30,7 @@ func runPrepareJournal(command string, args []string, output io.Writer) error {
 		*pages < 1 || *pages > rebuild.MaxJournalPages {
 		return fmt.Errorf("usage: feed %s -run ID [-pages 1..%d] [-allow-http]", command, rebuild.MaxJournalPages)
 	}
-	if mode := os.Getenv("ENV"); *allowHTTP && mode != "local" && mode != "test" {
+	if *allowHTTP && !localRebuildMode() {
 		return errors.New("journal HTTP is only allowed with ENV=local or ENV=test")
 	}
 	dsn := os.Getenv("DATABASE_URL")
@@ -78,4 +78,10 @@ func runPrepareJournal(command string, args []string, output io.Writer) error {
 		source, *id, checkpoint.Through, checkpoint.Watermark, checkpoint.Through == checkpoint.Watermark)
 
 	return err
+}
+
+func localRebuildMode() bool {
+	mode := os.Getenv("ENV")
+
+	return mode == "local" || mode == "test"
 }

@@ -12,6 +12,14 @@ import (
 // миграции, логирование, метрики, graceful shutdown) — внутри parker, здесь
 // только бизнес-логика (см. run).
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == prepareMaterialCommand {
+		if err := runPrepareMaterial(os.Args[2:], os.Stdout); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		return
+	}
 	if len(os.Args) > 1 && (os.Args[1] == prepareTaskCommand || os.Args[1] == prepareCatalogCommand) {
 		if err := runPrepareJournal(os.Args[1], os.Args[2:], os.Stdout); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
