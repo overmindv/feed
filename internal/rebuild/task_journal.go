@@ -4,12 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -17,7 +12,7 @@ import (
 const (
 	taskPageSize    = 100
 	maxTaskPage     = 512 << 10
-	MaxTaskPages    = 200
+	MaxJournalPages = 200
 	taskJournalPath = "/v1/internal/task-activity/changes"
 
 	TaskPublished   = "task.published"
@@ -45,10 +40,12 @@ type TaskChange struct {
 	Difficulty    string    `json:"difficulty,omitempty"`
 }
 
-type TaskCheckpoint struct {
+type Checkpoint struct {
 	Watermark int64
 	Through   int64
 }
+
+type TaskCheckpoint = Checkpoint
 
 type TaskPage struct {
 	TaskCheckpoint
@@ -66,9 +63,7 @@ type TaskStager interface {
 }
 
 type TaskJournal struct {
-	endpoint url.URL
-	token    string
-	client   *http.Client
+	*journalHTTP
 }
 
 func ValidRunID(id string) bool {
@@ -76,56 +71,18 @@ func ValidRunID(id string) bool {
 }
 
 func NewTaskJournal(address, token string, allowHTTP bool) (*TaskJournal, error) {
-	endpoint, err := url.Parse(address)
-	if err != nil || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" ||
-		endpoint.ForceQuery || endpoint.Fragment != "" || endpoint.RawPath != "" ||
-		(endpoint.Path != "" && endpoint.Path != "/") ||
-		(endpoint.Scheme != "https" && (!allowHTTP || endpoint.Scheme != "http")) {
-		return nil, errors.New("FEED_TASKS_URL must be a Tasks base URL without credentials, query or path")
+	transport, err := newJournalHTTP(address, token, taskJournalPath, "FEED_TASKS_URL", "TASKS_ACTIVITY_TOKEN", allowHTTP)
+	if err != nil {
+		return nil, err
 	}
-	if len(token) < 32 || len(token) > 512 || strings.ContainsFunc(token, func(r rune) bool { return r < 0x21 || r > 0x7e }) {
-		return nil, errors.New("TASKS_ACTIVITY_TOKEN must contain 32-512 printable ASCII characters without spaces")
-	}
-	endpoint.Path = taskJournalPath
 
-	return &TaskJournal{
-		endpoint: *endpoint, token: token,
-		client: &http.Client{
-			Transport:     &http.Transport{MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second},
-			Timeout:       10 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-	}, nil
-}
-
-func (j *TaskJournal) CloseIdleConnections() {
-	j.client.CloseIdleConnections()
+	return &TaskJournal{journalHTTP: transport}, nil
 }
 
 func (j *TaskJournal) ReadTaskPage(ctx context.Context, watermark *int64, after int64) (TaskPage, error) {
-	target := j.endpoint
-	query := url.Values{"after": {strconv.FormatInt(after, 10)}, "limit": {strconv.Itoa(taskPageSize)}}
-	if watermark != nil {
-		query.Set("watermark", strconv.FormatInt(*watermark, 10))
-	}
-	target.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	payload, err := j.readPage(ctx, watermark, after, taskPageSize, maxTaskPage)
 	if err != nil {
-		return TaskPage{}, errors.New("cannot build Tasks journal request")
-	}
-	request.Header.Set("Authorization", "Bearer "+j.token)
-	request.Header.Set("Accept", "application/json")
-	response, err := j.client.Do(request)
-	if err != nil {
-		return TaskPage{}, errors.New("cannot reach Tasks journal")
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return TaskPage{}, fmt.Errorf("tasks journal returned HTTP %d", response.StatusCode)
-	}
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maxTaskPage+1))
-	if err != nil || len(payload) > maxTaskPage {
-		return TaskPage{}, errors.New("cannot read bounded Tasks journal response")
+		return TaskPage{}, err
 	}
 	var wire struct {
 		Watermark *int64       `json:"watermark"`
@@ -175,7 +132,7 @@ func validTaskPage(page TaskPage, watermark *int64, after int64) bool {
 
 // StageTasks resumes a shadow import without writing to the active feed or Kafka offsets.
 func StageTasks(ctx context.Context, source TaskSource, stager TaskStager, id string, maxPages int) (TaskCheckpoint, error) {
-	if !ValidRunID(id) || maxPages < 1 || maxPages > MaxTaskPages {
+	if !ValidRunID(id) || maxPages < 1 || maxPages > MaxJournalPages {
 		return TaskCheckpoint{}, errors.New("invalid Tasks rebuild identifier or page budget")
 	}
 	checkpoint, found, err := stager.LoadTaskCheckpoint(ctx, id)
